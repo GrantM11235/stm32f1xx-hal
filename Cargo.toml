@@ -73,6 +73,7 @@ default-features = false
 version = "1.0.90"
 
 [features]
+default = ["stm32f103"]
 device-selected = []
 doc = []
 rt = ["stm32f1/rt"]

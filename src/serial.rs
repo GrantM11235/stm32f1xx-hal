@@ -48,7 +48,7 @@ use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
 use embedded_hal::serial::Write;
 
 use crate::afio::MAPR;
-use crate::dma::{dma1, CircBuffer, RxDma, Transfer, TxDma, R, W};
+use crate::dma::{dma1, ChannelLowLevel, CircBuffer, RxDma, Transfer, TxDma, R, W};
 use crate::gpio::gpioa::{PA10, PA2, PA3, PA9};
 use crate::gpio::gpiob::{PB10, PB11, PB6, PB7};
 use crate::gpio::gpioc::{PC10, PC11};

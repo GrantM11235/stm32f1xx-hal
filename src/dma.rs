@@ -3,7 +3,8 @@
 
 use core::{
     marker::PhantomData,
-    sync::atomic::{compiler_fence, Ordering},
+    mem, ptr,
+    sync::atomic::{self, compiler_fence, Ordering},
 };
 use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
 
@@ -124,11 +125,9 @@ macro_rules! dma {
     }),)+) => {
         $(
             pub mod $dmaX {
-                use core::{sync::atomic::{self, Ordering}, ptr, mem};
-
                 use crate::pac::{$DMAX, dma1};
 
-                use crate::dma::{CircBuffer, DmaExt, Error, Event, Half, Transfer, W, RxDma, TxDma, TransferPayload};
+                use crate::dma::{ChannelLowLevel, DmaExt, Event};
                 use crate::rcc::{AHB, Enable};
 
                 #[allow(clippy::manual_non_exhaustive)]
@@ -140,11 +139,11 @@ macro_rules! dma {
                     /// This singleton has exclusive access to the registers of the DMAx channel X
                     pub struct $CX { _0: () }
 
-                    impl $CX {
+                    impl ChannelLowLevel for $CX {
                         /// Associated peripheral `address`
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
-                        pub fn set_peripheral_address(&mut self, address: u32, inc: bool) {
+                        fn set_peripheral_address(&mut self, address: u32, inc: bool) {
                             self.ch().par.write(|w| w.pa().bits(address) );
                             self.ch().cr.modify(|_, w| w.pinc().bit(inc) );
                         }
@@ -152,35 +151,33 @@ macro_rules! dma {
                         /// `address` where from/to data will be read/write
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
-                        pub fn set_memory_address(&mut self, address: u32, inc: bool) {
+                        fn set_memory_address(&mut self, address: u32, inc: bool) {
                             self.ch().mar.write(|w| w.ma().bits(address) );
                             self.ch().cr.modify(|_, w| w.minc().bit(inc) );
                         }
 
                         /// Number of bytes to transfer
-                        pub fn set_transfer_length(&mut self, len: usize) {
+                        fn set_transfer_length(&mut self, len: usize) {
                             self.ch().ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
                         }
 
                         /// Starts the DMA transfer
-                        pub fn start(&mut self) {
+                        fn start(&mut self) {
                             self.ch().cr.modify(|_, w| w.en().set_bit() );
                         }
 
                         /// Stops the DMA transfer
-                        pub fn stop(&mut self) {
+                        fn stop(&mut self) {
                             self.ifcr().write(|w| w.$cgifX().set_bit());
                             self.ch().cr.modify(|_, w| w.en().clear_bit() );
                         }
 
                         /// Returns `true` if there's a transfer in progress
-                        pub fn in_progress(&self) -> bool {
+                        fn in_progress(&self) -> bool {
                             self.isr().$tcifX().bit_is_clear()
                         }
-                    }
 
-                    impl $CX {
-                        pub fn listen(&mut self, event: Event) {
+                        fn listen(&mut self, event: Event) {
                             match event {
                                 Event::HalfTransfer => self.ch().cr.modify(|_, w| w.htie().set_bit()),
                                 Event::TransferComplete => {
@@ -189,7 +186,7 @@ macro_rules! dma {
                             }
                         }
 
-                        pub fn unlisten(&mut self, event: Event) {
+                        fn unlisten(&mut self, event: Event) {
                             match event {
                                 Event::HalfTransfer => {
                                     self.ch().cr.modify(|_, w| w.htie().clear_bit())
@@ -200,191 +197,39 @@ macro_rules! dma {
                             }
                         }
 
-                        pub fn ch(&mut self) -> &dma1::CH {
+                        fn ch(&mut self) -> &dma1::CH {
                             unsafe { &(*$DMAX::ptr()).$chX }
                         }
 
-                        pub fn isr(&self) -> dma1::isr::R {
+                        fn isr(&self) -> dma1::isr::R {
                             // NOTE(unsafe) atomic read with no side effects
                             unsafe { (*$DMAX::ptr()).isr.read() }
                         }
 
-                        pub fn ifcr(&self) -> &dma1::IFCR {
+                        fn ifcr(&self) -> &dma1::IFCR {
                             unsafe { &(*$DMAX::ptr()).ifcr }
                         }
 
-                        pub fn get_ndtr(&self) -> u32 {
+                        fn get_ndtr(&self) -> u32 {
                             // NOTE(unsafe) atomic read with no side effects
                             unsafe { &(*$DMAX::ptr())}.$chX.ndtr.read().bits()
                         }
-                    }
 
-                    impl<B, PAYLOAD> CircBuffer<B, RxDma<PAYLOAD, $CX>>
-                    where
-                        RxDma<PAYLOAD, $CX>: TransferPayload,
-                    {
-                        /// Peeks into the readable half of the buffer
-                        pub fn peek<R, F>(&mut self, f: F) -> Result<R, Error>
-                            where
-                            F: FnOnce(&B, Half) -> R,
-                        {
-                            let half_being_read = self.readable_half()?;
-
-                            let buf = match half_being_read {
-                                Half::First => &self.buffer[0],
-                                Half::Second => &self.buffer[1],
-                            };
-
-                            // XXX does this need a compiler barrier?
-                            let ret = f(buf, half_being_read);
-
-
-                            let isr = self.payload.channel.isr();
-                            let first_half_is_done = isr.$htifX().bit_is_set();
-                            let second_half_is_done = isr.$tcifX().bit_is_set();
-
-                            if (half_being_read == Half::First && second_half_is_done) ||
-                                (half_being_read == Half::Second && first_half_is_done) {
-                                Err(Error::Overrun)
-                            } else {
-                                Ok(ret)
-                            }
+                        fn read_htif(&self) -> bool {
+                            self.isr().$htifX().bit_is_set()
+                        }
+                        fn read_tcif(&self) -> bool {
+                            self.isr().$tcifX().bit_is_set()
                         }
 
-                        /// Returns the `Half` of the buffer that can be read
-                        pub fn readable_half(&mut self) -> Result<Half, Error> {
-                            let isr = self.payload.channel.isr();
-                            let first_half_is_done = isr.$htifX().bit_is_set();
-                            let second_half_is_done = isr.$tcifX().bit_is_set();
-
-                            if first_half_is_done && second_half_is_done {
-                                return Err(Error::Overrun);
-                            }
-
-                            let last_read_half = self.readable_half;
-
-                            Ok(match last_read_half {
-                                Half::First => {
-                                    if second_half_is_done {
-                                        self.payload.channel.ifcr().write(|w| w.$ctcifX().set_bit());
-
-                                        self.readable_half = Half::Second;
-                                        Half::Second
-                                    } else {
-                                        last_read_half
-                                    }
-                                }
-                                Half::Second => {
-                                    if first_half_is_done {
-                                        self.payload.channel.ifcr().write(|w| w.$chtifX().set_bit());
-
-                                        self.readable_half = Half::First;
-                                        Half::First
-                                    } else {
-                                        last_read_half
-                                    }
-                                }
-                            })
+                        fn clear_htif(&self) {
+                            self.ifcr().write(|w| w.$chtifX().set_bit())
                         }
-
-                        /// Stops the transfer and returns the underlying buffer and RxDma
-                        pub fn stop(mut self) -> (&'static mut [B; 2], RxDma<PAYLOAD, $CX>) {
-                            self.payload.stop();
-
-                            (self.buffer, self.payload)
+                        fn clear_tcif(&self) {
+                            self.ifcr().write(|w| w.$ctcifX().set_bit())
                         }
-                    }
-
-                    impl<BUFFER, PAYLOAD, MODE> Transfer<MODE, BUFFER, RxDma<PAYLOAD, $CX>>
-                    where
-                        RxDma<PAYLOAD, $CX>: TransferPayload,
-                    {
-                        pub fn is_done(&self) -> bool {
-                            !self.payload.channel.in_progress()
-                        }
-
-                        pub fn wait(mut self) -> (BUFFER, RxDma<PAYLOAD, $CX>) {
-                            while !self.is_done() {}
-
-                            atomic::compiler_fence(Ordering::Acquire);
-
-                            self.payload.stop();
-
-                            // we need a read here to make the Acquire fence effective
-                            // we do *not* need this if `dma.stop` does a RMW operation
-                            unsafe { ptr::read_volatile(&0); }
-
-                            // we need a fence here for the same reason we need one in `Transfer.wait`
-                            atomic::compiler_fence(Ordering::Acquire);
-
-                            // `Transfer` needs to have a `Drop` implementation, because we accept
-                            // managed buffers that can free their memory on drop. Because of that
-                            // we can't move out of the `Transfer`'s fields, so we use `ptr::read`
-                            // and `mem::forget`.
-                            //
-                            // NOTE(unsafe) There is no panic branch between getting the resources
-                            // and forgetting `self`.
-                            unsafe {
-                                let buffer = ptr::read(&self.buffer);
-                                let payload = ptr::read(&self.payload);
-                                mem::forget(self);
-                                (buffer, payload)
-                            }
-                        }
-                    }
-
-                    impl<BUFFER, PAYLOAD, MODE> Transfer<MODE, BUFFER, TxDma<PAYLOAD, $CX>>
-                    where
-                        TxDma<PAYLOAD, $CX>: TransferPayload,
-                    {
-                        pub fn is_done(&self) -> bool {
-                            !self.payload.channel.in_progress()
-                        }
-
-                        pub fn wait(mut self) -> (BUFFER, TxDma<PAYLOAD, $CX>) {
-                            while !self.is_done() {}
-
-                            atomic::compiler_fence(Ordering::Acquire);
-
-                            self.payload.stop();
-
-                            // we need a read here to make the Acquire fence effective
-                            // we do *not* need this if `dma.stop` does a RMW operation
-                            unsafe { ptr::read_volatile(&0); }
-
-                            // we need a fence here for the same reason we need one in `Transfer.wait`
-                            atomic::compiler_fence(Ordering::Acquire);
-
-                            // `Transfer` needs to have a `Drop` implementation, because we accept
-                            // managed buffers that can free their memory on drop. Because of that
-                            // we can't move out of the `Transfer`'s fields, so we use `ptr::read`
-                            // and `mem::forget`.
-                            //
-                            // NOTE(unsafe) There is no panic branch between getting the resources
-                            // and forgetting `self`.
-                            unsafe {
-                                let buffer = ptr::read(&self.buffer);
-                                let payload = ptr::read(&self.payload);
-                                mem::forget(self);
-                                (buffer, payload)
-                            }
-                        }
-                    }
-
-                    impl<BUFFER, PAYLOAD> Transfer<W, BUFFER, RxDma<PAYLOAD, $CX>>
-                    where
-                        RxDma<PAYLOAD, $CX>: TransferPayload,
-                    {
-                        pub fn peek<T>(&self) -> &[T]
-                        where
-                            BUFFER: AsRef<[T]>,
-                        {
-                            let pending = self.payload.channel.get_ndtr() as usize;
-
-                            let slice = self.buffer.as_ref();
-                            let capacity = slice.len();
-
-                            &slice[..(capacity - pending)]
+                        fn clear_gif(&self) {
+                            self.ifcr().write(|w| w.$cgifX().set_bit())
                         }
                     }
                 )+
@@ -531,4 +376,222 @@ where
     Self: core::marker::Sized + TransferPayload,
 {
     fn write(self, buffer: B) -> Transfer<R, B, Self>;
+}
+
+pub trait ChannelLowLevel {
+    /// Associated peripheral `address`
+    ///
+    /// `inc` indicates whether the address will be incremented after every byte transfer
+    fn set_peripheral_address(&mut self, address: u32, inc: bool);
+
+    /// `address` where from/to data will be read/write
+    ///
+    /// `inc` indicates whether the address will be incremented after every byte transfer
+    fn set_memory_address(&mut self, address: u32, inc: bool);
+
+    /// Number of bytes to transfer
+    fn set_transfer_length(&mut self, len: usize);
+
+    /// Starts the DMA transfer
+    fn start(&mut self);
+
+    /// Stops the DMA transfer
+    fn stop(&mut self);
+
+    /// Returns `true` if there's a transfer in progress
+    fn in_progress(&self) -> bool;
+
+    fn listen(&mut self, event: Event);
+
+    fn unlisten(&mut self, event: Event);
+
+    fn ch(&mut self) -> &crate::pac::dma1::CH;
+
+    fn isr(&self) -> crate::pac::dma1::isr::R;
+
+    fn ifcr(&self) -> &crate::pac::dma1::IFCR;
+
+    fn get_ndtr(&self) -> u32;
+
+    fn read_htif(&self) -> bool;
+    fn read_tcif(&self) -> bool;
+
+    fn clear_htif(&self);
+    fn clear_tcif(&self);
+    fn clear_gif(&self);
+}
+
+impl<B, PAYLOAD, CX> CircBuffer<B, RxDma<PAYLOAD, CX>>
+where
+    CX: ChannelLowLevel,
+    RxDma<PAYLOAD, CX>: TransferPayload,
+{
+    /// Peeks into the readable half of the buffer
+    pub fn peek<R, F>(&mut self, f: F) -> Result<R, Error>
+    where
+        F: FnOnce(&B, Half) -> R,
+    {
+        let half_being_read = self.readable_half()?;
+
+        let buf = match half_being_read {
+            Half::First => &self.buffer[0],
+            Half::Second => &self.buffer[1],
+        };
+
+        // XXX does this need a compiler barrier?
+        let ret = f(buf, half_being_read);
+
+        let first_half_is_done = self.payload.channel.read_htif();
+        let second_half_is_done = self.payload.channel.read_tcif();
+
+        if (half_being_read == Half::First && second_half_is_done)
+            || (half_being_read == Half::Second && first_half_is_done)
+        {
+            Err(Error::Overrun)
+        } else {
+            Ok(ret)
+        }
+    }
+
+    /// Returns the `Half` of the buffer that can be read
+    pub fn readable_half(&mut self) -> Result<Half, Error> {
+        let first_half_is_done = self.payload.channel.read_htif();
+        let second_half_is_done = self.payload.channel.read_tcif();
+
+        if first_half_is_done && second_half_is_done {
+            return Err(Error::Overrun);
+        }
+
+        let last_read_half = self.readable_half;
+
+        Ok(match last_read_half {
+            Half::First => {
+                if second_half_is_done {
+                    self.payload.channel.clear_tcif();
+
+                    self.readable_half = Half::Second;
+                    Half::Second
+                } else {
+                    last_read_half
+                }
+            }
+            Half::Second => {
+                if first_half_is_done {
+                    self.payload.channel.clear_htif();
+
+                    self.readable_half = Half::First;
+                    Half::First
+                } else {
+                    last_read_half
+                }
+            }
+        })
+    }
+
+    /// Stops the transfer and returns the underlying buffer and RxDma
+    pub fn stop(mut self) -> (&'static mut [B; 2], RxDma<PAYLOAD, CX>) {
+        self.payload.stop();
+
+        (self.buffer, self.payload)
+    }
+}
+
+impl<BUFFER, PAYLOAD, MODE, CX> Transfer<MODE, BUFFER, RxDma<PAYLOAD, CX>>
+where
+    CX: ChannelLowLevel,
+    RxDma<PAYLOAD, CX>: TransferPayload,
+{
+    pub fn is_done(&self) -> bool {
+        !self.payload.channel.in_progress()
+    }
+
+    pub fn wait(mut self) -> (BUFFER, RxDma<PAYLOAD, CX>) {
+        while !self.is_done() {}
+
+        atomic::compiler_fence(Ordering::Acquire);
+
+        self.payload.stop();
+
+        // we need a read here to make the Acquire fence effective
+        // we do *not* need this if `dma.stop` does a RMW operation
+        unsafe {
+            ptr::read_volatile(&0);
+        }
+
+        // we need a fence here for the same reason we need one in `Transfer.wait`
+        atomic::compiler_fence(Ordering::Acquire);
+
+        // `Transfer` needs to have a `Drop` implementation, because we accept
+        // managed buffers that can free their memory on drop. Because of that
+        // we can't move out of the `Transfer`'s fields, so we use `ptr::read`
+        // and `mem::forget`.
+        //
+        // NOTE(unsafe) There is no panic branch between getting the resources
+        // and forgetting `self`.
+        unsafe {
+            let buffer = ptr::read(&self.buffer);
+            let payload = ptr::read(&self.payload);
+            mem::forget(self);
+            (buffer, payload)
+        }
+    }
+}
+
+impl<BUFFER, PAYLOAD, MODE, CX> Transfer<MODE, BUFFER, TxDma<PAYLOAD, CX>>
+where
+    CX: ChannelLowLevel,
+    TxDma<PAYLOAD, CX>: TransferPayload,
+{
+    pub fn is_done(&self) -> bool {
+        !self.payload.channel.in_progress()
+    }
+
+    pub fn wait(mut self) -> (BUFFER, TxDma<PAYLOAD, CX>) {
+        while !self.is_done() {}
+
+        atomic::compiler_fence(Ordering::Acquire);
+
+        self.payload.stop();
+
+        // we need a read here to make the Acquire fence effective
+        // we do *not* need this if `dma.stop` does a RMW operation
+        unsafe {
+            ptr::read_volatile(&0);
+        }
+
+        // we need a fence here for the same reason we need one in `Transfer.wait`
+        atomic::compiler_fence(Ordering::Acquire);
+
+        // `Transfer` needs to have a `Drop` implementation, because we accept
+        // managed buffers that can free their memory on drop. Because of that
+        // we can't move out of the `Transfer`'s fields, so we use `ptr::read`
+        // and `mem::forget`.
+        //
+        // NOTE(unsafe) There is no panic branch between getting the resources
+        // and forgetting `self`.
+        unsafe {
+            let buffer = ptr::read(&self.buffer);
+            let payload = ptr::read(&self.payload);
+            mem::forget(self);
+            (buffer, payload)
+        }
+    }
+}
+
+impl<BUFFER, PAYLOAD, CX> Transfer<W, BUFFER, RxDma<PAYLOAD, CX>>
+where
+    CX: ChannelLowLevel,
+    RxDma<PAYLOAD, CX>: TransferPayload,
+{
+    pub fn peek<T>(&self) -> &[T]
+    where
+        BUFFER: AsRef<[T]>,
+    {
+        let pending = self.payload.channel.get_ndtr() as usize;
+
+        let slice = self.buffer.as_ref();
+        let capacity = slice.len();
+
+        &slice[..(capacity - pending)]
+    }
 }

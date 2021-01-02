@@ -43,7 +43,7 @@ use crate::afio::MAPR;
 use crate::dma::dma1::{C3, C5};
 #[cfg(feature = "connectivity")]
 use crate::dma::dma2::C2;
-use crate::dma::{Transfer, TransferPayload, Transmit, TxDma, R};
+use crate::dma::{ChannelLowLevel, Transfer, TransferPayload, Transmit, TxDma, R};
 use crate::gpio::gpioa::{PA5, PA6, PA7};
 use crate::gpio::gpiob::{PB13, PB14, PB15, PB3, PB4, PB5};
 #[cfg(feature = "connectivity")]

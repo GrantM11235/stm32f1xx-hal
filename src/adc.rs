@@ -3,7 +3,9 @@
 use core::marker::PhantomData;
 use embedded_hal::adc::{Channel, OneShot};
 
-use crate::dma::{dma1::C1, CircBuffer, Receive, RxDma, Transfer, TransferPayload, W};
+use crate::dma::{
+    dma1::C1, ChannelLowLevel, CircBuffer, Receive, RxDma, Transfer, TransferPayload, W,
+};
 use crate::gpio::Analog;
 use crate::gpio::{gpioa, gpiob, gpioc};
 use crate::rcc::{Clocks, Enable, Reset, APB2};
