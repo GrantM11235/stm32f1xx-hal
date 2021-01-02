@@ -133,26 +133,26 @@ macro_rules! dma {
                     /// A singleton that represents a single DMAx channel (channel X in this case)
                     ///
                     /// This singleton has exclusive access to the registers of the DMAx channel X
-                    pub struct $CX { _0: () }
+                    pub struct $CX { ch: &'static dma1::CH }
 
                     impl ChannelLowLevel for $CX {
                         /// Associated peripheral `address`
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
                         fn set_peripheral_address(&mut self, address: u32) {
-                            unsafe { &(*$DMAX::ptr()).$chX }.par.write(|w| w.pa().bits(address) );
+                            self.ch.par.write(|w| w.pa().bits(address) );
                         }
 
                         /// `address` where from/to data will be read/write
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
                         fn set_memory_address(&mut self, address: u32) {
-                            unsafe { &(*$DMAX::ptr()).$chX }.mar.write(|w| w.ma().bits(address) );
+                            self.ch.mar.write(|w| w.ma().bits(address) );
                         }
 
                         /// Number of bytes to transfer
                         fn set_transfer_length(&mut self, len: usize) {
-                            unsafe { &(*$DMAX::ptr()).$chX }.ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
+                            self.ch.ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
                         }
 
                         /// Starts the DMA transfer
@@ -192,16 +192,16 @@ macro_rules! dma {
                         }
 
                         fn cr(&mut self) -> &dma1::ch::CR {
-                            unsafe { &(*$DMAX::ptr()).$chX.cr }
+                            &self.ch.cr
                         }
 
                         fn get_ndtr(&self) -> u32 {
                             // NOTE(unsafe) atomic read with no side effects
-                            unsafe { &(*$DMAX::ptr())}.$chX.ndtr.read().bits()
+                            self.ch.ndtr.read().bits()
                         }
 
                         fn get_flags(&self) -> dma::Flags {
-                            dma::Flags::from_bits_truncate(unsafe { (*$DMAX::ptr()).isr.read() }.bits() >> ($x - 1))
+                            dma::Flags::from_bits_truncate(unsafe { &(*$DMAX::ptr()) }.isr.read().bits() >> ($x - 1))
                         }
 
                         fn clear_flags(&self, flags: dma::Flags) {
@@ -216,12 +216,14 @@ macro_rules! dma {
                     fn split(self, ahb: &mut AHB) -> Channels {
                         $DMAX::enable(ahb);
 
+                        let dma1::RegisterBlock {$($chX),+, ..} = unsafe {&*Self::ptr()};
+
                         // reset the DMA control registers (stops all on-going transfers)
                         $(
-                            self.$chX.cr.reset();
+                            $chX.cr.reset();
                         )+
 
-                        Channels((), $($CX { _0: () }),+)
+                        Channels((), $($CX { ch: $chX }),+)
                     }
                 }
             }
