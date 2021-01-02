@@ -139,17 +139,15 @@ macro_rules! dma {
                         /// Associated peripheral `address`
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
-                        fn set_peripheral_address(&mut self, address: u32, inc: bool) {
+                        fn set_peripheral_address(&mut self, address: u32) {
                             unsafe { &(*$DMAX::ptr()).$chX }.par.write(|w| w.pa().bits(address) );
-                            self.cr().modify(|_, w| w.pinc().bit(inc) );
                         }
 
                         /// `address` where from/to data will be read/write
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
-                        fn set_memory_address(&mut self, address: u32, inc: bool) {
+                        fn set_memory_address(&mut self, address: u32) {
                             unsafe { &(*$DMAX::ptr()).$chX }.mar.write(|w| w.ma().bits(address) );
-                            self.cr().modify(|_, w| w.minc().bit(inc) );
                         }
 
                         /// Number of bytes to transfer
@@ -343,14 +341,10 @@ bitflags::bitflags! {
 
 pub trait ChannelLowLevel {
     /// Associated peripheral `address`
-    ///
-    /// `inc` indicates whether the address will be incremented after every byte transfer
-    fn set_peripheral_address(&mut self, address: u32, inc: bool);
+    fn set_peripheral_address(&mut self, address: u32);
 
     /// `address` where from/to data will be read/write
-    ///
-    /// `inc` indicates whether the address will be incremented after every byte transfer
-    fn set_memory_address(&mut self, address: u32, inc: bool);
+    fn set_memory_address(&mut self, address: u32);
 
     /// Number of bytes to transfer
     fn set_transfer_length(&mut self, len: usize);

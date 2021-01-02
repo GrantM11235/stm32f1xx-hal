@@ -712,8 +712,8 @@ where
         // until the end of the transfer.
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
         self.channel
-            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 }, false);
-        self.channel.set_memory_address(ptr as u32, true);
+            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 });
+        self.channel.set_memory_address(ptr as u32);
         self.channel.set_transfer_length(len);
 
         atomic::compiler_fence(Ordering::Release);
@@ -727,6 +727,10 @@ where
                 .bits16()
                 .psize()
                 .bits16()
+                .minc()
+                .enabled()
+                .pinc()
+                .disabled()
                 .circ()
                 .set_bit()
                 .dir()
@@ -749,8 +753,8 @@ where
         // until the end of the transfer.
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
         self.channel
-            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 }, false);
-        self.channel.set_memory_address(ptr as u32, true);
+            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 });
+        self.channel.set_memory_address(ptr as u32);
         self.channel.set_transfer_length(len);
 
         atomic::compiler_fence(Ordering::Release);
@@ -763,6 +767,10 @@ where
                 .bits16()
                 .psize()
                 .bits16()
+                .minc()
+                .enabled()
+                .pinc()
+                .disabled()
                 .circ()
                 .clear_bit()
                 .dir()

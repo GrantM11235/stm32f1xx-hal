@@ -594,8 +594,8 @@ macro_rules! serialdma {
                     // NOTE(unsafe) We own the buffer now and we won't call other `&mut` on it
                     // until the end of the transfer.
                     let (ptr, len) = unsafe { buffer.static_write_buffer() };
-                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 }, false);
-                    self.channel.set_memory_address(ptr as u32, true);
+                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 });
+                    self.channel.set_memory_address(ptr as u32);
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
@@ -605,6 +605,8 @@ macro_rules! serialdma {
                         .pl()      .medium()
                         .msize()   .bits8()
                         .psize()   .bits8()
+                        .minc()    .enabled()
+                        .pinc()    .disabled()
                         .circ()    .set_bit()
                         .dir()     .clear_bit()
                     });
@@ -623,8 +625,8 @@ macro_rules! serialdma {
                     // NOTE(unsafe) We own the buffer now and we won't call other `&mut` on it
                     // until the end of the transfer.
                     let (ptr, len) = unsafe { buffer.static_write_buffer() };
-                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 }, false);
-                    self.channel.set_memory_address(ptr as u32, true);
+                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 });
+                    self.channel.set_memory_address(ptr as u32);
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
@@ -633,6 +635,8 @@ macro_rules! serialdma {
                         .pl()      .medium()
                         .msize()   .bits8()
                         .psize()   .bits8()
+                        .minc()    .enabled()
+                        .pinc()    .disabled()
                         .circ()    .clear_bit()
                         .dir()     .clear_bit()
                     });
@@ -651,9 +655,9 @@ macro_rules! serialdma {
                     // until the end of the transfer.
                     let (ptr, len) = unsafe { buffer.static_read_buffer() };
 
-                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 }, false);
+                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 });
 
-                    self.channel.set_memory_address(ptr as u32, true);
+                    self.channel.set_memory_address(ptr as u32);
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
@@ -663,6 +667,8 @@ macro_rules! serialdma {
                         .pl()      .medium()
                         .msize()   .bits8()
                         .psize()   .bits8()
+                        .minc()    .enabled()
+                        .pinc()    .disabled()
                         .circ()    .clear_bit()
                         .dir()     .set_bit()
                     });

@@ -564,11 +564,9 @@ macro_rules! spi_dma {
                 // NOTE(unsafe) We own the buffer now and we won't call other `&mut` on it
                 // until the end of the transfer.
                 let (ptr, len) = unsafe { buffer.static_read_buffer() };
-                self.channel.set_peripheral_address(
-                    unsafe { &(*$SPIi::ptr()).dr as *const _ as u32 },
-                    false,
-                );
-                self.channel.set_memory_address(ptr as u32, true);
+                self.channel
+                    .set_peripheral_address(unsafe { &(*$SPIi::ptr()).dr as *const _ as u32 });
+                self.channel.set_memory_address(ptr as u32);
                 self.channel.set_transfer_length(len);
 
                 atomic::compiler_fence(Ordering::Release);
@@ -586,6 +584,12 @@ macro_rules! spi_dma {
                         // 8-bit peripheral size
                         .psize()
                         .bits8()
+                        // memory increment enabled
+                        .minc()
+                        .enabled()
+                        // peripheral increment disabled
+                        .pinc()
+                        .disabled()
                         // circular mode disabled
                         .circ()
                         .clear_bit()
