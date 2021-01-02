@@ -546,3 +546,119 @@ where
         &slice[..(capacity - pending)]
     }
 }
+
+pub trait DmaWord {
+    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A;
+}
+
+impl DmaWord for u8 {
+    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS8;
+}
+
+impl DmaWord for u16 {
+    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS16;
+}
+
+impl DmaWord for u32 {
+    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS32;
+}
+
+pub trait DmaReadablePeriph {
+    type Word: DmaWord;
+    fn address(&self) -> u32;
+}
+
+pub struct RxChannel<CHANNEL, PERIPH, WORD>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaReadablePeriph,
+    WORD: DmaWord,
+{
+    channel: CHANNEL,
+    periph: PERIPH,
+    _word: PhantomData<WORD>,
+}
+
+impl<CHANNEL, PERIPH, WORD> RxChannel<CHANNEL, PERIPH, WORD>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaReadablePeriph,
+    WORD: DmaWord,
+{
+    pub fn new(mut channel: CHANNEL, periph: PERIPH) -> Self {
+        channel.cr().reset();
+        channel.set_peripheral_address(periph.address());
+        channel.cr().write(|w| {
+            w.mem2mem()
+                .disabled()
+                .pl()
+                .medium()
+                .msize()
+                .variant(WORD::SIZE)
+                .psize()
+                .variant(PERIPH::Word::SIZE)
+                .circ()
+                .disabled()
+                .minc()
+                .enabled()
+                .pinc()
+                .enabled()
+                .dir()
+                .from_peripheral()
+                .teie()
+                .disabled()
+                .htie()
+                .disabled()
+                .tcie()
+                .disabled()
+                .en()
+                .disabled()
+        });
+        Self {
+            channel,
+            periph,
+            _word: PhantomData,
+        }
+    }
+
+    pub fn split(self) -> (CHANNEL, PERIPH) {
+        (self.channel, self.periph)
+    }
+
+    pub fn start<B>(mut self, mut buffer: B) -> MyRxTransfer<CHANNEL, PERIPH, WORD, B>
+    where
+        B: StaticWriteBuffer<Word = WORD>,
+    {
+        let (ptr, len) = unsafe { buffer.static_write_buffer() };
+        self.channel.set_memory_address(ptr as u32);
+        self.channel.set_transfer_length(len);
+        self.channel.start();
+
+        MyRxTransfer {
+            rxchannel: self,
+            buffer,
+        }
+    }
+}
+
+pub struct MyRxTransfer<CHANNEL, PERIPH, WORD, BUFFER>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaReadablePeriph,
+    WORD: DmaWord,
+{
+    rxchannel: RxChannel<CHANNEL, PERIPH, WORD>,
+    buffer: BUFFER,
+}
+
+impl<CHANNEL, PERIPH, WORD, BUFFER> MyRxTransfer<CHANNEL, PERIPH, WORD, BUFFER>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaReadablePeriph,
+    WORD: DmaWord,
+{
+    pub fn stop(mut self) -> (RxChannel<CHANNEL, PERIPH, WORD>, BUFFER) {
+        self.rxchannel.channel.stop();
+        (self.rxchannel, self.buffer)
+    }
+}
