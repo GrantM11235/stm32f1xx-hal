@@ -116,18 +116,14 @@ macro_rules! dma {
     ($($DMAX:ident: ($dmaX:ident, {
         $($CX:ident: (
             $chX:ident,
-            $htifX:ident,
-            $tcifX:ident,
-            $chtifX:ident,
-            $ctcifX:ident,
-            $cgifX:ident
+            $x:expr,
         ),)+
     }),)+) => {
         $(
             pub mod $dmaX {
                 use crate::pac::{$DMAX, dma1};
 
-                use crate::dma::{ChannelLowLevel, DmaExt, Event};
+                use crate::dma::{self, ChannelLowLevel, DmaExt, Event};
                 use crate::rcc::{AHB, Enable};
 
                 #[allow(clippy::manual_non_exhaustive)]
@@ -168,13 +164,13 @@ macro_rules! dma {
 
                         /// Stops the DMA transfer
                         fn stop(&mut self) {
-                            self.ifcr().write(|w| w.$cgifX().set_bit());
+                            self.clear_flags(dma::Flags::GLOBAL);
                             self.ch().cr.modify(|_, w| w.en().clear_bit() );
                         }
 
                         /// Returns `true` if there's a transfer in progress
                         fn in_progress(&self) -> bool {
-                            self.isr().$tcifX().bit_is_clear()
+                            self.get_flags().contains(dma::Flags::TRANSFER_COMPLETE)
                         }
 
                         fn listen(&mut self, event: Event) {
@@ -215,21 +211,12 @@ macro_rules! dma {
                             unsafe { &(*$DMAX::ptr())}.$chX.ndtr.read().bits()
                         }
 
-                        fn read_htif(&self) -> bool {
-                            self.isr().$htifX().bit_is_set()
-                        }
-                        fn read_tcif(&self) -> bool {
-                            self.isr().$tcifX().bit_is_set()
+                        fn get_flags(&self) -> dma::Flags {
+                            dma::Flags::from_bits_truncate(self.isr().bits() >> ($x - 1))
                         }
 
-                        fn clear_htif(&self) {
-                            self.ifcr().write(|w| w.$chtifX().set_bit())
-                        }
-                        fn clear_tcif(&self) {
-                            self.ifcr().write(|w| w.$ctcifX().set_bit())
-                        }
-                        fn clear_gif(&self) {
-                            self.ifcr().write(|w| w.$cgifX().set_bit())
+                        fn clear_flags(&self, flags: dma::Flags) {
+                            self.ifcr().write(|w| unsafe { w.bits(flags.bits() << ($x - 1)) });
                         }
                     }
                 )+
@@ -256,67 +243,43 @@ macro_rules! dma {
 dma! {
     DMA1: (dma1, {
         C1: (
-            ch1,
-            htif1, tcif1,
-            chtif1, ctcif1, cgif1
+            ch1, 1,
         ),
         C2: (
-            ch2,
-            htif2, tcif2,
-            chtif2, ctcif2, cgif2
+            ch2, 2,
         ),
         C3: (
-            ch3,
-            htif3, tcif3,
-            chtif3, ctcif3, cgif3
+            ch3, 3,
         ),
         C4: (
-            ch4,
-            htif4, tcif4,
-            chtif4, ctcif4, cgif4
+            ch4, 4,
         ),
         C5: (
-            ch5,
-            htif5, tcif5,
-            chtif5, ctcif5, cgif5
+            ch5, 5,
         ),
         C6: (
-            ch6,
-            htif6, tcif6,
-            chtif6, ctcif6, cgif6
+            ch6, 6,
         ),
         C7: (
-            ch7,
-            htif7, tcif7,
-            chtif7, ctcif7, cgif7
+            ch7, 7,
         ),
     }),
 
     DMA2: (dma2, {
         C1: (
-            ch1,
-            htif1, tcif1,
-            chtif1, ctcif1, cgif1
+            ch1, 1,
         ),
         C2: (
-            ch2,
-            htif2, tcif2,
-            chtif2, ctcif2, cgif2
+            ch2, 2,
         ),
         C3: (
-            ch3,
-            htif3, tcif3,
-            chtif3, ctcif3, cgif3
+            ch3, 3,
         ),
         C4: (
-            ch4,
-            htif4, tcif4,
-            chtif4, ctcif4, cgif4
+            ch4, 4,
         ),
         C5: (
-            ch5,
-            htif5, tcif5,
-            chtif5, ctcif5, cgif5
+            ch5, 5,
         ),
     }),
 }
@@ -378,6 +341,15 @@ where
     fn write(self, buffer: B) -> Transfer<R, B, Self>;
 }
 
+bitflags::bitflags! {
+    pub struct Flags: u32 {
+        const GLOBAL = 0b0001;
+        const TRANSFER_COMPLETE = 0b0010;
+        const HALF_TRANSFER = 0b0100;
+        const TRANSFER_ERROR = 0b1000;
+    }
+}
+
 pub trait ChannelLowLevel {
     /// Associated peripheral `address`
     ///
@@ -413,12 +385,8 @@ pub trait ChannelLowLevel {
 
     fn get_ndtr(&self) -> u32;
 
-    fn read_htif(&self) -> bool;
-    fn read_tcif(&self) -> bool;
-
-    fn clear_htif(&self);
-    fn clear_tcif(&self);
-    fn clear_gif(&self);
+    fn get_flags(&self) -> Flags;
+    fn clear_flags(&self, flags: Flags);
 }
 
 impl<B, PAYLOAD, CX> CircBuffer<B, RxDma<PAYLOAD, CX>>
@@ -441,8 +409,9 @@ where
         // XXX does this need a compiler barrier?
         let ret = f(buf, half_being_read);
 
-        let first_half_is_done = self.payload.channel.read_htif();
-        let second_half_is_done = self.payload.channel.read_tcif();
+        let flags = self.payload.channel.get_flags();
+        let first_half_is_done = flags.contains(Flags::HALF_TRANSFER);
+        let second_half_is_done = flags.contains(Flags::TRANSFER_COMPLETE);
 
         if (half_being_read == Half::First && second_half_is_done)
             || (half_being_read == Half::Second && first_half_is_done)
@@ -455,8 +424,9 @@ where
 
     /// Returns the `Half` of the buffer that can be read
     pub fn readable_half(&mut self) -> Result<Half, Error> {
-        let first_half_is_done = self.payload.channel.read_htif();
-        let second_half_is_done = self.payload.channel.read_tcif();
+        let flags = self.payload.channel.get_flags();
+        let first_half_is_done = flags.contains(Flags::HALF_TRANSFER);
+        let second_half_is_done = flags.contains(Flags::TRANSFER_COMPLETE);
 
         if first_half_is_done && second_half_is_done {
             return Err(Error::Overrun);
@@ -467,7 +437,7 @@ where
         Ok(match last_read_half {
             Half::First => {
                 if second_half_is_done {
-                    self.payload.channel.clear_tcif();
+                    self.payload.channel.clear_flags(Flags::TRANSFER_COMPLETE);
 
                     self.readable_half = Half::Second;
                     Half::Second
@@ -477,7 +447,7 @@ where
             }
             Half::Second => {
                 if first_half_is_done {
-                    self.payload.channel.clear_htif();
+                    self.payload.channel.clear_flags(Flags::HALF_TRANSFER);
 
                     self.readable_half = Half::First;
                     Half::First
