@@ -572,7 +572,7 @@ macro_rules! spi_dma {
                 self.channel.set_transfer_length(len);
 
                 atomic::compiler_fence(Ordering::Release);
-                self.channel.ch().cr.modify(|_, w| {
+                self.channel.cr().modify(|_, w| {
                     w
                         // memory to memory mode disabled
                         .mem2mem()

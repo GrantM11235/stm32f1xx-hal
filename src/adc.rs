@@ -718,7 +718,7 @@ where
 
         atomic::compiler_fence(Ordering::Release);
 
-        self.channel.ch().cr.modify(|_, w| {
+        self.channel.cr().modify(|_, w| {
             w.mem2mem()
                 .clear_bit()
                 .pl()
@@ -754,7 +754,7 @@ where
         self.channel.set_transfer_length(len);
 
         atomic::compiler_fence(Ordering::Release);
-        self.channel.ch().cr.modify(|_, w| {
+        self.channel.cr().modify(|_, w| {
             w.mem2mem()
                 .clear_bit()
                 .pl()

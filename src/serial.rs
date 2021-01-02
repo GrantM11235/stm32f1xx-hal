@@ -600,7 +600,7 @@ macro_rules! serialdma {
 
                     atomic::compiler_fence(Ordering::Release);
 
-                    self.channel.ch().cr.modify(|_, w| { w
+                    self.channel.cr().modify(|_, w| { w
                         .mem2mem() .clear_bit()
                         .pl()      .medium()
                         .msize()   .bits8()
@@ -628,7 +628,7 @@ macro_rules! serialdma {
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
-                    self.channel.ch().cr.modify(|_, w| { w
+                    self.channel.cr().modify(|_, w| { w
                         .mem2mem() .clear_bit()
                         .pl()      .medium()
                         .msize()   .bits8()
@@ -658,7 +658,7 @@ macro_rules! serialdma {
 
                     atomic::compiler_fence(Ordering::Release);
 
-                    self.channel.ch().cr.modify(|_, w| { w
+                    self.channel.cr().modify(|_, w| { w
                         .mem2mem() .clear_bit()
                         .pl()      .medium()
                         .msize()   .bits8()

@@ -140,32 +140,32 @@ macro_rules! dma {
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
                         fn set_peripheral_address(&mut self, address: u32, inc: bool) {
-                            self.ch().par.write(|w| w.pa().bits(address) );
-                            self.ch().cr.modify(|_, w| w.pinc().bit(inc) );
+                            unsafe { &(*$DMAX::ptr()).$chX }.par.write(|w| w.pa().bits(address) );
+                            self.cr().modify(|_, w| w.pinc().bit(inc) );
                         }
 
                         /// `address` where from/to data will be read/write
                         ///
                         /// `inc` indicates whether the address will be incremented after every byte transfer
                         fn set_memory_address(&mut self, address: u32, inc: bool) {
-                            self.ch().mar.write(|w| w.ma().bits(address) );
-                            self.ch().cr.modify(|_, w| w.minc().bit(inc) );
+                            unsafe { &(*$DMAX::ptr()).$chX }.mar.write(|w| w.ma().bits(address) );
+                            self.cr().modify(|_, w| w.minc().bit(inc) );
                         }
 
                         /// Number of bytes to transfer
                         fn set_transfer_length(&mut self, len: usize) {
-                            self.ch().ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
+                            unsafe { &(*$DMAX::ptr()).$chX }.ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
                         }
 
                         /// Starts the DMA transfer
                         fn start(&mut self) {
-                            self.ch().cr.modify(|_, w| w.en().set_bit() );
+                            self.cr().modify(|_, w| w.en().set_bit() );
                         }
 
                         /// Stops the DMA transfer
                         fn stop(&mut self) {
                             self.clear_flags(dma::Flags::GLOBAL);
-                            self.ch().cr.modify(|_, w| w.en().clear_bit() );
+                            self.cr().modify(|_, w| w.en().clear_bit() );
                         }
 
                         /// Returns `true` if there's a transfer in progress
@@ -175,9 +175,9 @@ macro_rules! dma {
 
                         fn listen(&mut self, event: Event) {
                             match event {
-                                Event::HalfTransfer => self.ch().cr.modify(|_, w| w.htie().set_bit()),
+                                Event::HalfTransfer => self.cr().modify(|_, w| w.htie().set_bit()),
                                 Event::TransferComplete => {
-                                    self.ch().cr.modify(|_, w| w.tcie().set_bit())
+                                    self.cr().modify(|_, w| w.tcie().set_bit())
                                 }
                             }
                         }
@@ -185,16 +185,16 @@ macro_rules! dma {
                         fn unlisten(&mut self, event: Event) {
                             match event {
                                 Event::HalfTransfer => {
-                                    self.ch().cr.modify(|_, w| w.htie().clear_bit())
+                                    self.cr().modify(|_, w| w.htie().clear_bit())
                                 },
                                 Event::TransferComplete => {
-                                    self.ch().cr.modify(|_, w| w.tcie().clear_bit())
+                                    self.cr().modify(|_, w| w.tcie().clear_bit())
                                 }
                             }
                         }
 
-                        fn ch(&mut self) -> &dma1::CH {
-                            unsafe { &(*$DMAX::ptr()).$chX }
+                        fn cr(&mut self) -> &dma1::ch::CR {
+                            unsafe { &(*$DMAX::ptr()).$chX.cr }
                         }
 
                         fn get_ndtr(&self) -> u32 {
@@ -368,7 +368,7 @@ pub trait ChannelLowLevel {
 
     fn unlisten(&mut self, event: Event);
 
-    fn ch(&mut self) -> &crate::pac::dma1::CH;
+    fn cr(&mut self) -> &crate::pac::dma1::ch::CR;
 
     fn get_ndtr(&self) -> u32;
 
