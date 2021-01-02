@@ -197,26 +197,17 @@ macro_rules! dma {
                             unsafe { &(*$DMAX::ptr()).$chX }
                         }
 
-                        fn isr(&self) -> dma1::isr::R {
-                            // NOTE(unsafe) atomic read with no side effects
-                            unsafe { (*$DMAX::ptr()).isr.read() }
-                        }
-
-                        fn ifcr(&self) -> &dma1::IFCR {
-                            unsafe { &(*$DMAX::ptr()).ifcr }
-                        }
-
                         fn get_ndtr(&self) -> u32 {
                             // NOTE(unsafe) atomic read with no side effects
                             unsafe { &(*$DMAX::ptr())}.$chX.ndtr.read().bits()
                         }
 
                         fn get_flags(&self) -> dma::Flags {
-                            dma::Flags::from_bits_truncate(self.isr().bits() >> ($x - 1))
+                            dma::Flags::from_bits_truncate(unsafe { (*$DMAX::ptr()).isr.read() }.bits() >> ($x - 1))
                         }
 
                         fn clear_flags(&self, flags: dma::Flags) {
-                            self.ifcr().write(|w| unsafe { w.bits(flags.bits() << ($x - 1)) });
+                            unsafe { &(*$DMAX::ptr()) }.ifcr.write(|w| unsafe { w.bits(flags.bits() << ($x - 1)) });
                         }
                     }
                 )+
@@ -378,10 +369,6 @@ pub trait ChannelLowLevel {
     fn unlisten(&mut self, event: Event);
 
     fn ch(&mut self) -> &crate::pac::dma1::CH;
-
-    fn isr(&self) -> crate::pac::dma1::isr::R;
-
-    fn ifcr(&self) -> &crate::pac::dma1::IFCR;
 
     fn get_ndtr(&self) -> u32;
 
