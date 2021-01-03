@@ -340,7 +340,7 @@ bitflags::bitflags! {
     }
 }
 
-pub trait ChannelLowLevel {
+pub trait ChannelLowLevel: Sized {
     /// Associated peripheral `address`
     fn set_peripheral_address(&mut self, address: u32);
 
@@ -369,6 +369,46 @@ pub trait ChannelLowLevel {
 
     fn get_flags(&self) -> Flags;
     fn clear_flags(&self, flags: Flags);
+
+    fn new_rx<PERIPH, WORD>(mut self, periph: PERIPH) -> RxChannel<Self, PERIPH, WORD>
+    where
+        WORD: DmaWord,
+        PERIPH: DmaReadablePeriph,
+    {
+        self.cr().reset();
+        self.set_peripheral_address(periph.address());
+        self.cr().write(|w| {
+            w.mem2mem()
+                .disabled()
+                .pl()
+                .medium()
+                .msize()
+                .variant(WORD::SIZE)
+                .psize()
+                .variant(PERIPH::Word::SIZE)
+                .circ()
+                .disabled()
+                .minc()
+                .enabled()
+                .pinc()
+                .enabled()
+                .dir()
+                .from_peripheral()
+                .teie()
+                .disabled()
+                .htie()
+                .disabled()
+                .tcie()
+                .disabled()
+                .en()
+                .disabled()
+        });
+        RxChannel {
+            channel: self,
+            periph,
+            _word: PhantomData,
+        }
+    }
 }
 
 impl<B, PAYLOAD, CX> CircBuffer<B, RxDma<PAYLOAD, CX>>
@@ -586,42 +626,6 @@ where
     PERIPH: DmaReadablePeriph,
     WORD: DmaWord,
 {
-    pub fn new(mut channel: CHANNEL, periph: PERIPH) -> Self {
-        channel.cr().reset();
-        channel.set_peripheral_address(periph.address());
-        channel.cr().write(|w| {
-            w.mem2mem()
-                .disabled()
-                .pl()
-                .medium()
-                .msize()
-                .variant(WORD::SIZE)
-                .psize()
-                .variant(PERIPH::Word::SIZE)
-                .circ()
-                .disabled()
-                .minc()
-                .enabled()
-                .pinc()
-                .enabled()
-                .dir()
-                .from_peripheral()
-                .teie()
-                .disabled()
-                .htie()
-                .disabled()
-                .tcie()
-                .disabled()
-                .en()
-                .disabled()
-        });
-        Self {
-            channel,
-            periph,
-            _word: PhantomData,
-        }
-    }
-
     pub fn split(self) -> (CHANNEL, PERIPH) {
         (self.channel, self.periph)
     }
@@ -658,7 +662,7 @@ where
     PERIPH: DmaReadablePeriph,
     WORD: DmaWord,
 {
-    pub fn stop(mut self) -> (RxChannel<CHANNEL, PERIPH, WORD>, BUFFER) {
+    pub fn abort(mut self) -> (RxChannel<CHANNEL, PERIPH, WORD>, BUFFER) {
         self.rxchannel.channel.stop();
         (self.rxchannel, self.buffer)
     }
