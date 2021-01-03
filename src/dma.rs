@@ -126,8 +126,7 @@ macro_rules! dma {
                 use crate::dma::{self, ChannelLowLevel, DmaExt, Event};
                 use crate::rcc::{AHB, Enable};
 
-                #[allow(clippy::manual_non_exhaustive)]
-                pub struct Channels((), $(pub $CX),+);
+                pub struct Channels{$(pub $chX: $CX),+}
 
                 $(
                     /// A singleton that represents a single DMAx channel (channel X in this case)
@@ -223,7 +222,7 @@ macro_rules! dma {
                             $chX.cr.reset();
                         )+
 
-                        Channels((), $($CX { ch: $chX }),+)
+                        Channels{ $($chX: $CX { ch: $chX }),+ }
                     }
                 }
             }
