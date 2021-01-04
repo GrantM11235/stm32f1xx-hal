@@ -123,7 +123,7 @@ macro_rules! dma {
             pub mod $dmaX {
                 use crate::pac::{$DMAX, dma1};
 
-                use crate::dma::{self, ChannelLowLevel, DmaExt, Event};
+                use crate::dma::{self, ChannelLowLevel, DmaExt};
                 use crate::rcc::{AHB, Enable};
 
                 pub struct Channels{$(pub $chX: $CX),+}
@@ -152,42 +152,6 @@ macro_rules! dma {
                         /// Number of bytes to transfer
                         fn set_transfer_length(&mut self, len: usize) {
                             self.ch.ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
-                        }
-
-                        /// Starts the DMA transfer
-                        fn start(&mut self) {
-                            self.cr().modify(|_, w| w.en().set_bit() );
-                        }
-
-                        /// Stops the DMA transfer
-                        fn stop(&mut self) {
-                            self.clear_flags(dma::Flags::GLOBAL);
-                            self.cr().modify(|_, w| w.en().clear_bit() );
-                        }
-
-                        /// Returns `true` if there's a transfer in progress
-                        fn in_progress(&self) -> bool {
-                            self.get_flags().contains(dma::Flags::TRANSFER_COMPLETE)
-                        }
-
-                        fn listen(&mut self, event: Event) {
-                            match event {
-                                Event::HalfTransfer => self.cr().modify(|_, w| w.htie().set_bit()),
-                                Event::TransferComplete => {
-                                    self.cr().modify(|_, w| w.tcie().set_bit())
-                                }
-                            }
-                        }
-
-                        fn unlisten(&mut self, event: Event) {
-                            match event {
-                                Event::HalfTransfer => {
-                                    self.cr().modify(|_, w| w.htie().clear_bit())
-                                },
-                                Event::TransferComplete => {
-                                    self.cr().modify(|_, w| w.tcie().clear_bit())
-                                }
-                            }
                         }
 
                         fn cr(&mut self) -> &dma1::ch::CR {
@@ -351,17 +315,34 @@ pub trait ChannelLowLevel: Sized {
     fn set_transfer_length(&mut self, len: usize);
 
     /// Starts the DMA transfer
-    fn start(&mut self);
+    fn start(&mut self) {
+        self.cr().modify(|_, w| w.en().set_bit());
+    }
 
     /// Stops the DMA transfer
-    fn stop(&mut self);
+    fn stop(&mut self) {
+        self.clear_flags(Flags::GLOBAL);
+        self.cr().modify(|_, w| w.en().clear_bit());
+    }
 
     /// Returns `true` if there's a transfer in progress
-    fn in_progress(&self) -> bool;
+    fn in_progress(&self) -> bool {
+        self.get_flags().contains(Flags::TRANSFER_COMPLETE)
+    }
 
-    fn listen(&mut self, event: Event);
+    fn listen(&mut self, event: Event) {
+        match event {
+            Event::HalfTransfer => self.cr().modify(|_, w| w.htie().set_bit()),
+            Event::TransferComplete => self.cr().modify(|_, w| w.tcie().set_bit()),
+        }
+    }
 
-    fn unlisten(&mut self, event: Event);
+    fn unlisten(&mut self, event: Event) {
+        match event {
+            Event::HalfTransfer => self.cr().modify(|_, w| w.htie().clear_bit()),
+            Event::TransferComplete => self.cr().modify(|_, w| w.tcie().clear_bit()),
+        }
+    }
 
     fn cr(&mut self) -> &crate::pac::dma1::ch::CR;
 
