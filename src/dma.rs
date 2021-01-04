@@ -643,7 +643,7 @@ where
         self.channel.start();
 
         LinearTransfer {
-            mychannel: self,
+            periph_channel: self,
             buffer,
         }
     }
@@ -664,7 +664,7 @@ where
         self.channel.start();
 
         LinearTransfer {
-            mychannel: self,
+            periph_channel: self,
             buffer,
         }
     }
@@ -675,7 +675,7 @@ where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    mychannel: PeriphChannel<CHANNEL, PERIPH>,
+    periph_channel: PeriphChannel<CHANNEL, PERIPH>,
     buffer: BUFFER,
 }
 
@@ -686,14 +686,14 @@ where
 {
     pub fn get_remaining_transfers(&self) -> Result<u16> {
         if self
-            .mychannel
+            .periph_channel
             .channel
             .get_flags()
             .contains(Flags::TRANSFER_ERROR)
         {
             Err(Error::TransferError)
         } else {
-            Ok(self.mychannel.channel.get_ndtr() as u16)
+            Ok(self.periph_channel.channel.get_ndtr() as u16)
         }
     }
 
@@ -707,8 +707,9 @@ where
     }
 
     pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, BUFFER) {
-        self.mychannel.channel.stop();
-        (self.mychannel, self.buffer)
+        self.periph_channel.channel.stop();
+        self.periph_channel.channel.clear_flags(Flags::all());
+        (self.periph_channel, self.buffer)
     }
 
     pub fn wait(self) -> ResultNonBlocking<(PeriphChannel<CHANNEL, PERIPH>, BUFFER)> {
@@ -717,8 +718,8 @@ where
     }
 
     pub fn restart(&mut self) {
-        self.mychannel.channel.stop();
-        self.mychannel.channel.start();
+        self.periph_channel.channel.stop();
+        self.periph_channel.channel.start();
     }
 
     pub fn peek<T>(&self) -> Result<&[T]>
