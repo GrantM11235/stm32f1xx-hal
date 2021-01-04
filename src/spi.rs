@@ -544,7 +544,7 @@ macro_rules! spi_dma {
                     .spi
                     .cr2
                     .modify(|_, w| w.txdmaen().set_bit());
-                self.channel.start();
+                self.channel.start(None);
             }
             fn stop(&mut self) {
                 self.payload

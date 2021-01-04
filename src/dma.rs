@@ -319,14 +319,21 @@ pub trait ChannelLowLevel: Sized {
     fn set_transfer_length(&mut self, len: usize);
 
     /// Starts the DMA transfer
-    fn start(&mut self) {
-        self.cr().modify(|_, w| w.en().set_bit());
+    fn start(&mut self, circular: Option<bool>) {
+        match circular {
+            Some(circ) => {
+                self.cr().modify(|_, w| w.en().set_bit().circ().bit(circ));
+            }
+            None => {
+                self.cr().modify(|_, w| w.en().set_bit());
+            }
+        }
     }
 
     /// Stops the DMA transfer
     fn stop(&mut self) {
-        self.clear_flags(Flags::GLOBAL);
         self.cr().modify(|_, w| w.en().clear_bit());
+        self.clear_flags(Flags::all());
     }
 
     /// Returns `true` if there's a transfer in progress
@@ -640,7 +647,7 @@ where
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
         self.channel.set_memory_address(ptr as u32);
         self.channel.set_transfer_length(len);
-        self.channel.start();
+        self.channel.start(Some(false));
 
         LinearTransfer {
             periph_channel: self,
@@ -661,7 +668,7 @@ where
         let (ptr, len) = unsafe { buffer.static_read_buffer() };
         self.channel.set_memory_address(ptr as u32);
         self.channel.set_transfer_length(len);
-        self.channel.start();
+        self.channel.start(Some(false));
 
         LinearTransfer {
             periph_channel: self,
@@ -708,7 +715,6 @@ where
 
     pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, BUFFER) {
         self.periph_channel.channel.stop();
-        self.periph_channel.channel.clear_flags(Flags::all());
         (self.periph_channel, self.buffer)
     }
 
@@ -719,7 +725,7 @@ where
 
     pub fn restart(&mut self) {
         self.periph_channel.channel.stop();
-        self.periph_channel.channel.start();
+        self.periph_channel.channel.start(Some(false));
     }
 
     pub fn peek<T>(&self) -> Result<&[T]>

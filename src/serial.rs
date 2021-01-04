@@ -529,7 +529,7 @@ macro_rules! serialdma {
 
             impl TransferPayload for $rxdma {
                 fn start(&mut self) {
-                    self.channel.start();
+                    self.channel.start(None);
                 }
                 fn stop(&mut self) {
                     self.channel.stop();
@@ -538,7 +538,7 @@ macro_rules! serialdma {
 
             impl TransferPayload for $txdma {
                 fn start(&mut self) {
-                    self.channel.start();
+                    self.channel.start(None);
                 }
                 fn stop(&mut self) {
                     self.channel.stop();

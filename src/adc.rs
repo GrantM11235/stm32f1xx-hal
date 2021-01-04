@@ -591,7 +591,7 @@ impl<PINS, MODE> Receive for AdcDma<PINS, MODE> {
 
 impl<PINS> TransferPayload for AdcDma<PINS, Continuous> {
     fn start(&mut self) {
-        self.channel.start();
+        self.channel.start(None);
         self.payload.adc.rb.cr2.modify(|_, w| w.cont().set_bit());
         self.payload.adc.rb.cr2.modify(|_, w| w.adon().set_bit());
     }
@@ -603,7 +603,7 @@ impl<PINS> TransferPayload for AdcDma<PINS, Continuous> {
 
 impl<PINS> TransferPayload for AdcDma<PINS, Scan> {
     fn start(&mut self) {
-        self.channel.start();
+        self.channel.start(None);
         self.payload.adc.rb.cr2.modify(|_, w| w.adon().set_bit());
     }
     fn stop(&mut self) {
