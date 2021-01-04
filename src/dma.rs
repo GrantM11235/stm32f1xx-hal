@@ -14,7 +14,11 @@ use crate::rcc::AHB;
 #[non_exhaustive]
 pub enum Error {
     Overrun,
+    TransferError,
 }
+
+type Result<T> = core::result::Result<T, Error>;
+type ResultNonBlocking<T> = nb::Result<T, Error>;
 
 pub enum Event {
     HalfTransfer,
@@ -351,10 +355,9 @@ pub trait ChannelLowLevel: Sized {
     fn get_flags(&self) -> Flags;
     fn clear_flags(&self, flags: Flags);
 
-    fn new_rx<PERIPH, WORD>(mut self, periph: PERIPH) -> RxChannel<Self, PERIPH, WORD>
+    fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<Self, PERIPH>
     where
-        WORD: DmaWord,
-        PERIPH: DmaReadablePeriph,
+        PERIPH: DmaPeriph<Channel = Self>,
     {
         self.cr().reset();
         self.set_peripheral_address(periph.address());
@@ -364,9 +367,9 @@ pub trait ChannelLowLevel: Sized {
                 .pl()
                 .medium()
                 .msize()
-                .variant(WORD::SIZE)
+                .variant(PERIPH::MemWord::SIZE)
                 .psize()
-                .variant(PERIPH::Word::SIZE)
+                .variant(PERIPH::PeriphWord::SIZE)
                 .circ()
                 .disabled()
                 .minc()
@@ -374,7 +377,7 @@ pub trait ChannelLowLevel: Sized {
                 .pinc()
                 .enabled()
                 .dir()
-                .from_peripheral()
+                .variant(PERIPH::Direction::DIRECTION)
                 .teie()
                 .disabled()
                 .htie()
@@ -384,10 +387,9 @@ pub trait ChannelLowLevel: Sized {
                 .en()
                 .disabled()
         });
-        RxChannel {
+        PeriphChannel {
             channel: self,
             periph,
-            _word: PhantomData,
         }
     }
 }
@@ -398,7 +400,7 @@ where
     RxDma<PAYLOAD, CX>: TransferPayload,
 {
     /// Peeks into the readable half of the buffer
-    pub fn peek<R, F>(&mut self, f: F) -> Result<R, Error>
+    pub fn peek<R, F>(&mut self, f: F) -> Result<R>
     where
         F: FnOnce(&B, Half) -> R,
     {
@@ -426,7 +428,7 @@ where
     }
 
     /// Returns the `Half` of the buffer that can be read
-    pub fn readable_half(&mut self) -> Result<Half, Error> {
+    pub fn readable_half(&mut self) -> Result<Half> {
         let flags = self.payload.channel.get_flags();
         let first_half_is_done = flags.contains(Flags::HALF_TRANSFER);
         let second_half_is_done = flags.contains(Flags::TRANSFER_COMPLETE);
@@ -585,66 +587,161 @@ impl DmaWord for u32 {
     const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS32;
 }
 
-pub trait DmaReadablePeriph {
-    type Word: DmaWord;
+pub trait Direction {
+    const DIRECTION: stm32f1::stm32f103::dma1::ch::cr::DIR_A;
+}
+
+impl Direction for R {
+    const DIRECTION: stm32f1::stm32f103::dma1::ch::cr::DIR_A =
+        stm32f1::stm32f103::dma1::ch::cr::DIR_A::FROMPERIPHERAL;
+}
+
+impl Direction for W {
+    const DIRECTION: stm32f1::stm32f103::dma1::ch::cr::DIR_A =
+        stm32f1::stm32f103::dma1::ch::cr::DIR_A::FROMMEMORY;
+}
+
+pub trait DmaPeriph {
+    type Direction: Direction;
+    type PeriphWord: DmaWord;
+    type MemWord: DmaWord;
+    type Channel: ChannelLowLevel;
     fn address(&self) -> u32;
 }
 
-pub struct RxChannel<CHANNEL, PERIPH, WORD>
+pub struct PeriphChannel<CHANNEL, PERIPH>
 where
     CHANNEL: ChannelLowLevel,
-    PERIPH: DmaReadablePeriph,
-    WORD: DmaWord,
+    PERIPH: DmaPeriph,
 {
     channel: CHANNEL,
     periph: PERIPH,
-    _word: PhantomData<WORD>,
 }
 
-impl<CHANNEL, PERIPH, WORD> RxChannel<CHANNEL, PERIPH, WORD>
+impl<CHANNEL, PERIPH> PeriphChannel<CHANNEL, PERIPH>
 where
     CHANNEL: ChannelLowLevel,
-    PERIPH: DmaReadablePeriph,
-    WORD: DmaWord,
+    PERIPH: DmaPeriph,
 {
     pub fn split(self) -> (CHANNEL, PERIPH) {
         (self.channel, self.periph)
     }
+}
 
-    pub fn start<B>(mut self, mut buffer: B) -> MyRxTransfer<CHANNEL, PERIPH, WORD, B>
+impl<CHANNEL, PERIPH> PeriphChannel<CHANNEL, PERIPH>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaPeriph<Direction = R>,
+{
+    pub fn send_linear<B>(mut self, mut buffer: B) -> LinearTransfer<CHANNEL, PERIPH, B>
     where
-        B: StaticWriteBuffer<Word = WORD>,
+        B: StaticWriteBuffer<Word = PERIPH::MemWord>,
     {
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
         self.channel.set_memory_address(ptr as u32);
         self.channel.set_transfer_length(len);
         self.channel.start();
 
-        MyRxTransfer {
-            rxchannel: self,
+        LinearTransfer {
+            mychannel: self,
             buffer,
         }
     }
 }
 
-pub struct MyRxTransfer<CHANNEL, PERIPH, WORD, BUFFER>
+impl<CHANNEL, PERIPH> PeriphChannel<CHANNEL, PERIPH>
 where
     CHANNEL: ChannelLowLevel,
-    PERIPH: DmaReadablePeriph,
-    WORD: DmaWord,
+    PERIPH: DmaPeriph<Direction = W>,
 {
-    rxchannel: RxChannel<CHANNEL, PERIPH, WORD>,
+    pub fn recieve_linear<B>(mut self, buffer: B) -> LinearTransfer<CHANNEL, PERIPH, B>
+    where
+        B: StaticReadBuffer<Word = PERIPH::MemWord>,
+    {
+        let (ptr, len) = unsafe { buffer.static_read_buffer() };
+        self.channel.set_memory_address(ptr as u32);
+        self.channel.set_transfer_length(len);
+        self.channel.start();
+
+        LinearTransfer {
+            mychannel: self,
+            buffer,
+        }
+    }
+}
+
+pub struct LinearTransfer<CHANNEL, PERIPH, BUFFER>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaPeriph,
+{
+    mychannel: PeriphChannel<CHANNEL, PERIPH>,
     buffer: BUFFER,
 }
 
-impl<CHANNEL, PERIPH, WORD, BUFFER> MyRxTransfer<CHANNEL, PERIPH, WORD, BUFFER>
+impl<CHANNEL, PERIPH, BUFFER> LinearTransfer<CHANNEL, PERIPH, BUFFER>
 where
     CHANNEL: ChannelLowLevel,
-    PERIPH: DmaReadablePeriph,
-    WORD: DmaWord,
+    PERIPH: DmaPeriph,
 {
-    pub fn abort(mut self) -> (RxChannel<CHANNEL, PERIPH, WORD>, BUFFER) {
-        self.rxchannel.channel.stop();
-        (self.rxchannel, self.buffer)
+    pub fn get_remaining_transfers(&self) -> Result<u16> {
+        if self
+            .mychannel
+            .channel
+            .get_flags()
+            .contains(Flags::TRANSFER_ERROR)
+        {
+            Err(Error::TransferError)
+        } else {
+            Ok(self.mychannel.channel.get_ndtr() as u16)
+        }
+    }
+
+    pub fn poll(&self) -> ResultNonBlocking<()> {
+        let remaining = self.get_remaining_transfers()?;
+        if remaining == 0 {
+            Ok(())
+        } else {
+            Err(nb::Error::WouldBlock)
+        }
+    }
+
+    pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, BUFFER) {
+        self.mychannel.channel.stop();
+        (self.mychannel, self.buffer)
+    }
+
+    pub fn wait(self) -> ResultNonBlocking<(PeriphChannel<CHANNEL, PERIPH>, BUFFER)> {
+        self.poll()?;
+        Ok(self.abort())
+    }
+
+    pub fn restart(&mut self) {
+        self.mychannel.channel.stop();
+        self.mychannel.channel.start();
+    }
+
+    pub fn peek<T>(&self) -> Result<&[T]>
+    where
+        BUFFER: AsRef<[T]>,
+    {
+        let pending = self.get_remaining_transfers()? as usize;
+
+        let slice = self.buffer.as_ref();
+        let capacity = slice.len();
+
+        Ok(&slice[..(capacity - pending)])
+    }
+
+    pub fn peek_mut<T>(&mut self) -> Result<&mut [T]>
+    where
+        BUFFER: AsMut<[T]>,
+    {
+        let pending = self.get_remaining_transfers()? as usize;
+
+        let slice = self.buffer.as_mut();
+        let capacity = slice.len();
+
+        Ok(&mut slice[..(capacity - pending)])
     }
 }
