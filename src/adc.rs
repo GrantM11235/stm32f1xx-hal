@@ -2,6 +2,7 @@
 
 use embedded_hal::adc::{Channel, OneShot};
 
+use crate::dma;
 use crate::gpio::Analog;
 use crate::gpio::{gpioa, gpiob, gpioc};
 use crate::rcc::{Clocks, Enable, Reset, APB2};
@@ -578,6 +579,31 @@ pub trait SetChannels<PINS>: ChannelTimeSequence {
     fn set_sequence(&mut self);
 }
 
+pub struct AdcDma<ADC, PINS> {
+    adc: ADC,
+    pins: PINS,
+}
+
+impl<ADC, PINS> AdcDma<ADC, PINS> {
+    pub fn split(self) -> (ADC, PINS) {
+        (self.adc, self.pins)
+    }
+}
+
+unsafe impl<ADC, PINS> dma::DmaPeriph for AdcDma<ADC, PINS> {
+    type Direction = dma::Rx;
+
+    type PeriphWord = u32;
+
+    type MemWord = u16;
+
+    type Channel = dma::dma1::C1;
+
+    fn address(&self) -> u32 {
+        unsafe { &(*ADC1::ptr()).dr as *const _ as u32 }
+    }
+}
+
 /*
 pub type AdcDma<PINS, MODE> = RxDma<AdcPayload<PINS, MODE>, C1>;
 
@@ -607,9 +633,10 @@ impl<PINS> TransferPayload for AdcDma<PINS, Scan> {
         self.channel.stop();
     }
 }
+*/
 
 impl Adc<ADC1> {
-    pub fn with_dma<PIN>(mut self, pins: PIN, dma_ch: C1) -> AdcDma<PIN, Continuous>
+    pub fn with_dma<PIN>(mut self, pins: PIN) -> AdcDma<Self, PIN>
     where
         PIN: Channel<ADC1, ID = u8>,
     {
@@ -621,18 +648,10 @@ impl Adc<ADC1> {
             .modify(|_, w| unsafe { w.sq1().bits(PIN::channel()) });
         self.rb.cr2.modify(|_, w| w.dma().set_bit());
 
-        let payload = AdcPayload {
-            adc: self,
-            pins,
-            _mode: PhantomData,
-        };
-        RxDma {
-            payload,
-            channel: dma_ch,
-        }
+        AdcDma { adc: self, pins }
     }
 
-    pub fn with_scan_dma<PINS>(mut self, pins: PINS, dma_ch: C1) -> AdcDma<PINS, Scan>
+    pub fn with_scan_dma<PINS>(mut self, pins: PINS) -> AdcDma<Self, PINS>
     where
         Self: SetChannels<PINS>,
     {
@@ -655,18 +674,11 @@ impl Adc<ADC1> {
             .cr2
             .modify(|_, w| w.dma().set_bit().adon().set_bit());
 
-        let payload = AdcPayload {
-            adc: self,
-            pins,
-            _mode: PhantomData,
-        };
-        RxDma {
-            payload,
-            channel: dma_ch,
-        }
+        AdcDma { adc: self, pins }
     }
 }
 
+/*
 impl<PINS> AdcDma<PINS, Continuous>
 where
     Self: TransferPayload,
