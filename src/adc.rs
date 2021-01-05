@@ -3,9 +3,7 @@
 use core::marker::PhantomData;
 use embedded_hal::adc::{Channel, OneShot};
 
-use crate::dma::{
-    dma1::C1, ChannelLowLevel, CircBuffer, Receive, RxDma, Transfer, TransferPayload, W,
-};
+use crate::dma::{dma1::C1, CircBuffer, Receive, RxDma, Transfer, TransferPayload, W};
 use crate::gpio::Analog;
 use crate::gpio::{gpioa, gpiob, gpioc};
 use crate::rcc::{Clocks, Enable, Reset, APB2};
@@ -591,7 +589,7 @@ impl<PINS, MODE> Receive for AdcDma<PINS, MODE> {
 
 impl<PINS> TransferPayload for AdcDma<PINS, Continuous> {
     fn start(&mut self) {
-        self.channel.start(None);
+        self.channel.start();
         self.payload.adc.rb.cr2.modify(|_, w| w.cont().set_bit());
         self.payload.adc.rb.cr2.modify(|_, w| w.adon().set_bit());
     }
@@ -603,7 +601,7 @@ impl<PINS> TransferPayload for AdcDma<PINS, Continuous> {
 
 impl<PINS> TransferPayload for AdcDma<PINS, Scan> {
     fn start(&mut self) {
-        self.channel.start(None);
+        self.channel.start();
         self.payload.adc.rb.cr2.modify(|_, w| w.adon().set_bit());
     }
     fn stop(&mut self) {
@@ -712,13 +710,13 @@ where
         // until the end of the transfer.
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
         self.channel
-            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 });
-        self.channel.set_memory_address(ptr as u32);
+            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 }, false);
+        self.channel.set_memory_address(ptr as u32, true);
         self.channel.set_transfer_length(len);
 
         atomic::compiler_fence(Ordering::Release);
 
-        self.channel.cr().modify(|_, w| {
+        self.channel.ch().cr.modify(|_, w| {
             w.mem2mem()
                 .clear_bit()
                 .pl()
@@ -727,10 +725,6 @@ where
                 .bits16()
                 .psize()
                 .bits16()
-                .minc()
-                .enabled()
-                .pinc()
-                .disabled()
                 .circ()
                 .set_bit()
                 .dir()
@@ -753,12 +747,12 @@ where
         // until the end of the transfer.
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
         self.channel
-            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 });
-        self.channel.set_memory_address(ptr as u32);
+            .set_peripheral_address(unsafe { &(*ADC1::ptr()).dr as *const _ as u32 }, false);
+        self.channel.set_memory_address(ptr as u32, true);
         self.channel.set_transfer_length(len);
 
         atomic::compiler_fence(Ordering::Release);
-        self.channel.cr().modify(|_, w| {
+        self.channel.ch().cr.modify(|_, w| {
             w.mem2mem()
                 .clear_bit()
                 .pl()
@@ -767,10 +761,6 @@ where
                 .bits16()
                 .psize()
                 .bits16()
-                .minc()
-                .enabled()
-                .pinc()
-                .disabled()
                 .circ()
                 .clear_bit()
                 .dir()

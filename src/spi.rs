@@ -43,7 +43,7 @@ use crate::afio::MAPR;
 use crate::dma::dma1::{C3, C5};
 #[cfg(feature = "connectivity")]
 use crate::dma::dma2::C2;
-use crate::dma::{ChannelLowLevel, Transfer, TransferPayload, Transmit, TxDma, R};
+use crate::dma::{Transfer, TransferPayload, Transmit, TxDma, R};
 use crate::gpio::gpioa::{PA5, PA6, PA7};
 use crate::gpio::gpiob::{PB13, PB14, PB15, PB3, PB4, PB5};
 #[cfg(feature = "connectivity")]
@@ -544,7 +544,7 @@ macro_rules! spi_dma {
                     .spi
                     .cr2
                     .modify(|_, w| w.txdmaen().set_bit());
-                self.channel.start(None);
+                self.channel.start();
             }
             fn stop(&mut self) {
                 self.payload
@@ -564,13 +564,15 @@ macro_rules! spi_dma {
                 // NOTE(unsafe) We own the buffer now and we won't call other `&mut` on it
                 // until the end of the transfer.
                 let (ptr, len) = unsafe { buffer.static_read_buffer() };
-                self.channel
-                    .set_peripheral_address(unsafe { &(*$SPIi::ptr()).dr as *const _ as u32 });
-                self.channel.set_memory_address(ptr as u32);
+                self.channel.set_peripheral_address(
+                    unsafe { &(*$SPIi::ptr()).dr as *const _ as u32 },
+                    false,
+                );
+                self.channel.set_memory_address(ptr as u32, true);
                 self.channel.set_transfer_length(len);
 
                 atomic::compiler_fence(Ordering::Release);
-                self.channel.cr().modify(|_, w| {
+                self.channel.ch().cr.modify(|_, w| {
                     w
                         // memory to memory mode disabled
                         .mem2mem()
@@ -584,12 +586,6 @@ macro_rules! spi_dma {
                         // 8-bit peripheral size
                         .psize()
                         .bits8()
-                        // memory increment enabled
-                        .minc()
-                        .enabled()
-                        // peripheral increment disabled
-                        .pinc()
-                        .disabled()
                         // circular mode disabled
                         .circ()
                         .clear_bit()

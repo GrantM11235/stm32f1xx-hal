@@ -48,7 +48,7 @@ use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
 use embedded_hal::serial::Write;
 
 use crate::afio::MAPR;
-use crate::dma::{dma1, ChannelLowLevel, CircBuffer, RxDma, Transfer, TxDma, R, W};
+use crate::dma::{dma1, CircBuffer, RxDma, Transfer, TxDma, R, W};
 use crate::gpio::gpioa::{PA10, PA2, PA3, PA9};
 use crate::gpio::gpiob::{PB10, PB11, PB6, PB7};
 use crate::gpio::gpioc::{PC10, PC11};
@@ -529,7 +529,7 @@ macro_rules! serialdma {
 
             impl TransferPayload for $rxdma {
                 fn start(&mut self) {
-                    self.channel.start(None);
+                    self.channel.start();
                 }
                 fn stop(&mut self) {
                     self.channel.stop();
@@ -538,7 +538,7 @@ macro_rules! serialdma {
 
             impl TransferPayload for $txdma {
                 fn start(&mut self) {
-                    self.channel.start(None);
+                    self.channel.start();
                 }
                 fn stop(&mut self) {
                     self.channel.stop();
@@ -594,19 +594,17 @@ macro_rules! serialdma {
                     // NOTE(unsafe) We own the buffer now and we won't call other `&mut` on it
                     // until the end of the transfer.
                     let (ptr, len) = unsafe { buffer.static_write_buffer() };
-                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 });
-                    self.channel.set_memory_address(ptr as u32);
+                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 }, false);
+                    self.channel.set_memory_address(ptr as u32, true);
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
 
-                    self.channel.cr().modify(|_, w| { w
+                    self.channel.ch().cr.modify(|_, w| { w
                         .mem2mem() .clear_bit()
                         .pl()      .medium()
                         .msize()   .bits8()
                         .psize()   .bits8()
-                        .minc()    .enabled()
-                        .pinc()    .disabled()
                         .circ()    .set_bit()
                         .dir()     .clear_bit()
                     });
@@ -625,18 +623,16 @@ macro_rules! serialdma {
                     // NOTE(unsafe) We own the buffer now and we won't call other `&mut` on it
                     // until the end of the transfer.
                     let (ptr, len) = unsafe { buffer.static_write_buffer() };
-                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 });
-                    self.channel.set_memory_address(ptr as u32);
+                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 }, false);
+                    self.channel.set_memory_address(ptr as u32, true);
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
-                    self.channel.cr().modify(|_, w| { w
+                    self.channel.ch().cr.modify(|_, w| { w
                         .mem2mem() .clear_bit()
                         .pl()      .medium()
                         .msize()   .bits8()
                         .psize()   .bits8()
-                        .minc()    .enabled()
-                        .pinc()    .disabled()
                         .circ()    .clear_bit()
                         .dir()     .clear_bit()
                     });
@@ -655,20 +651,18 @@ macro_rules! serialdma {
                     // until the end of the transfer.
                     let (ptr, len) = unsafe { buffer.static_read_buffer() };
 
-                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 });
+                    self.channel.set_peripheral_address(unsafe{ &(*$USARTX::ptr()).dr as *const _ as u32 }, false);
 
-                    self.channel.set_memory_address(ptr as u32);
+                    self.channel.set_memory_address(ptr as u32, true);
                     self.channel.set_transfer_length(len);
 
                     atomic::compiler_fence(Ordering::Release);
 
-                    self.channel.cr().modify(|_, w| { w
+                    self.channel.ch().cr.modify(|_, w| { w
                         .mem2mem() .clear_bit()
                         .pl()      .medium()
                         .msize()   .bits8()
                         .psize()   .bits8()
-                        .minc()    .enabled()
-                        .pinc()    .disabled()
                         .circ()    .clear_bit()
                         .dir()     .set_bit()
                     });
