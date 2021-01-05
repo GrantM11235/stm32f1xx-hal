@@ -1,6 +1,8 @@
 //! # Direct Memory Access
 #![allow(dead_code)]
 
+use core::convert::TryInto;
+
 use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
 
 use crate::pac;
@@ -65,32 +67,24 @@ macro_rules! dma {
                     pub struct $CX { ch: &'static dma1::CH }
 
                     impl ChannelLowLevel for $CX {
-                        /// Associated peripheral `address`
-                        ///
-                        /// `inc` indicates whether the address will be incremented after every byte transfer
-                        fn set_peripheral_address(&mut self, address: u32) {
+                        fn set_par(&mut self, address: u32) {
                             self.ch.par.write(|w| w.pa().bits(address) );
                         }
 
-                        /// `address` where from/to data will be read/write
-                        ///
-                        /// `inc` indicates whether the address will be incremented after every byte transfer
-                        fn set_memory_address(&mut self, address: u32) {
+                        fn set_mar(&mut self, address: u32) {
                             self.ch.mar.write(|w| w.ma().bits(address) );
                         }
 
-                        /// Number of bytes to transfer
-                        fn set_transfer_length(&mut self, len: usize) {
-                            self.ch.ndtr.write(|w| w.ndt().bits(cast::u16(len).unwrap()));
+                        fn set_ndt(&mut self, len: u16) {
+                            self.ch.ndtr.write(|w| w.ndt().bits(len));
+                        }
+
+                        fn get_ndt(&self) -> u16 {
+                            self.ch.ndtr.read().bits() as u16
                         }
 
                         fn cr(&mut self) -> &dma1::ch::CR {
                             &self.ch.cr
-                        }
-
-                        fn get_ndtr(&self) -> u32 {
-                            // NOTE(unsafe) atomic read with no side effects
-                            self.ch.ndtr.read().bits()
                         }
 
                         fn get_flags(&self) -> dma::Flags {
@@ -170,13 +164,21 @@ dma! {
 
 pub trait ChannelLowLevel: Sized {
     /// Associated peripheral `address`
-    fn set_peripheral_address(&mut self, address: u32);
+    fn set_par(&mut self, address: u32);
 
     /// `address` where from/to data will be read/write
-    fn set_memory_address(&mut self, address: u32);
+    fn set_mar(&mut self, address: u32);
 
     /// Number of bytes to transfer
-    fn set_transfer_length(&mut self, len: usize);
+    fn set_ndt(&mut self, len: u16);
+
+    fn get_ndt(&self) -> u16;
+
+    fn cr(&mut self) -> &pac::dma1::ch::CR;
+
+    fn get_flags(&self) -> Flags;
+
+    fn clear_flags(&self, flags: Flags);
 
     /// Starts the DMA transfer
     fn start(&mut self, circular: Option<bool>) {
@@ -196,38 +198,12 @@ pub trait ChannelLowLevel: Sized {
         self.clear_flags(Flags::all());
     }
 
-    /// Returns `true` if there's a transfer in progress
-    fn in_progress(&self) -> bool {
-        self.get_flags().contains(Flags::TRANSFER_COMPLETE)
-    }
-
-    fn listen(&mut self, event: Event) {
-        match event {
-            Event::HalfTransfer => self.cr().modify(|_, w| w.htie().set_bit()),
-            Event::TransferComplete => self.cr().modify(|_, w| w.tcie().set_bit()),
-        }
-    }
-
-    fn unlisten(&mut self, event: Event) {
-        match event {
-            Event::HalfTransfer => self.cr().modify(|_, w| w.htie().clear_bit()),
-            Event::TransferComplete => self.cr().modify(|_, w| w.tcie().clear_bit()),
-        }
-    }
-
-    fn cr(&mut self) -> &pac::dma1::ch::CR;
-
-    fn get_ndtr(&self) -> u32;
-
-    fn get_flags(&self) -> Flags;
-    fn clear_flags(&self, flags: Flags);
-
     fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<Self, PERIPH>
     where
         PERIPH: DmaPeriph<Channel = Self>,
     {
         self.cr().reset();
-        self.set_peripheral_address(periph.address());
+        self.set_par(periph.address());
         self.cr().write(|w| {
             w.mem2mem()
                 .disabled()
@@ -322,8 +298,8 @@ where
     }
 
     fn start(&mut self, address: u32, len: usize, circular: bool) {
-        self.channel.set_memory_address(address);
-        self.channel.set_transfer_length(len);
+        self.channel.set_mar(address);
+        self.channel.set_ndt(len.try_into().unwrap());
         self.channel.start(Some(circular));
     }
 }
@@ -430,7 +406,7 @@ where
         {
             Err(Error::TransferError)
         } else {
-            Ok(self.periph_channel.channel.get_ndtr() as u16)
+            Ok(self.periph_channel.channel.get_ndt())
         }
     }
 
