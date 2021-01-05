@@ -12,6 +12,8 @@ use crate::rcc;
 pub enum Error {
     Overrun,
     TransferError,
+    LengthMismatch,
+    BufferTooLong,
 }
 
 bitflags::bitflags! {
@@ -191,6 +193,65 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
             channel: self,
             periph,
         }
+    }
+
+    fn new_mem_to_mem<SOURCE, DEST>(
+        mut self,
+        source: SOURCE,
+        mut dest: DEST,
+    ) -> Result<MemToMemTransfer<Self, SOURCE, DEST>>
+    where
+        SOURCE: StaticReadBuffer,
+        <SOURCE as StaticReadBuffer>::Word: DmaWord,
+        DEST: StaticWriteBuffer,
+        <DEST as StaticWriteBuffer>::Word: DmaWord,
+    {
+        let (source_ptr, source_len) = unsafe { source.static_read_buffer() };
+        let (dest_ptr, dest_len) = unsafe { dest.static_write_buffer() };
+
+        if source_len != dest_len {
+            return Err(Error::LengthMismatch);
+        }
+
+        let len: u16 = source_len.try_into().map_err(|_| Error::BufferTooLong)?;
+
+        unsafe {
+            self.cr().reset();
+            self.set_par(source_ptr as u32);
+            self.set_mar(dest_ptr as u32);
+            self.set_ndt(len);
+            self.cr().write(|w| {
+                w.mem2mem()
+                    .enabled()
+                    .pl()
+                    .low()
+                    .msize()
+                    .variant(<DEST as StaticWriteBuffer>::Word::SIZE)
+                    .psize()
+                    .variant(<SOURCE as StaticReadBuffer>::Word::SIZE)
+                    .minc()
+                    .enabled()
+                    .pinc()
+                    .enabled()
+                    .circ()
+                    .disabled()
+                    .dir()
+                    .from_peripheral()
+                    .teie()
+                    .disabled()
+                    .htie()
+                    .disabled()
+                    .tcie()
+                    .disabled()
+                    .en()
+                    .enabled()
+            })
+        }
+        Ok(MemToMemTransfer {
+            channel: self,
+            source,
+            dest,
+        })
     }
 }
 
@@ -521,5 +582,36 @@ where
         self.mark_half_done()?;
 
         Ok(ret)
+    }
+}
+
+pub struct MemToMemTransfer<CHANNEL, SOURCE, DEST>
+where
+    CHANNEL: ChannelLowLevel,
+    SOURCE: StaticReadBuffer,
+    DEST: StaticWriteBuffer,
+{
+    channel: CHANNEL,
+    source: SOURCE,
+    dest: DEST,
+}
+
+impl<CHANNEL, SOURCE, DEST> MemToMemTransfer<CHANNEL, SOURCE, DEST>
+where
+    CHANNEL: ChannelLowLevel,
+    SOURCE: StaticReadBuffer,
+    DEST: StaticWriteBuffer,
+{
+    pub fn abort(mut self) -> (CHANNEL, SOURCE, DEST) {
+        unsafe { self.channel.cr().reset() };
+        (self.channel, self.source, self.dest)
+    }
+
+    pub fn wait(self) -> ResultNonBlocking<(CHANNEL, SOURCE, DEST)> {
+        if self.channel.get_ndt() != 0 {
+            Err(nb::Error::WouldBlock)
+        } else {
+            Ok(self.abort())
+        }
     }
 }
