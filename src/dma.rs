@@ -45,123 +45,99 @@ pub trait DmaExt {
 }
 
 macro_rules! dma {
-    ($($DMAX:ident: ($dmaX:ident, {
+    ($DMAX:ident: {
         $($CX:ident: (
             $chX:ident,
-            $x:expr,
+            $x:expr
         ),)+
-    }),)+) => {
+    }) => {
+        use crate::dma;
+        use crate::pac;
+        use crate::rcc;
+        use crate::rcc::Enable;
+
+        pub struct Channels{$(pub $chX: $CX),+}
+
         $(
-            pub mod $dmaX {
-                use crate::pac::{$DMAX, dma1};
+            /// A singleton that represents a single DMAx channel (channel X in this case)
+            ///
+            /// This singleton has exclusive access to the registers of the DMAx channel X
+            pub struct $CX { ch: &'static pac::dma1::CH }
 
-                use crate::dma::{self, ChannelLowLevel, DmaExt};
-                use crate::rcc::{AHB, Enable};
+            impl dma::ChannelLowLevel for $CX {
+                unsafe fn set_par(&mut self, address: u32) {
+                    self.ch.par.write(|w| w.pa().bits(address) );
+                }
 
-                pub struct Channels{$(pub $chX: $CX),+}
+                unsafe fn set_mar(&mut self, address: u32) {
+                    self.ch.mar.write(|w| w.ma().bits(address) );
+                }
 
-                $(
-                    /// A singleton that represents a single DMAx channel (channel X in this case)
-                    ///
-                    /// This singleton has exclusive access to the registers of the DMAx channel X
-                    pub struct $CX { ch: &'static dma1::CH }
+                unsafe fn set_ndt(&mut self, len: u16) {
+                    self.ch.ndtr.write(|w| w.ndt().bits(len));
+                }
 
-                    impl ChannelLowLevel for $CX {
-                        unsafe fn set_par(&mut self, address: u32) {
-                            self.ch.par.write(|w| w.pa().bits(address) );
-                        }
+                fn get_ndt(&self) -> u16 {
+                    self.ch.ndtr.read().bits() as u16
+                }
 
-                        unsafe fn set_mar(&mut self, address: u32) {
-                            self.ch.mar.write(|w| w.ma().bits(address) );
-                        }
+                unsafe fn cr(&mut self) -> &pac::dma1::ch::CR {
+                    &self.ch.cr
+                }
 
-                        unsafe fn set_ndt(&mut self, len: u16) {
-                            self.ch.ndtr.write(|w| w.ndt().bits(len));
-                        }
+                fn get_flags(&self) -> dma::Flags {
+                    dma::Flags::from_bits_truncate(unsafe { &(*pac::$DMAX::ptr()) }.isr.read().bits() >> ($x - 1))
+                }
 
-                        fn get_ndt(&self) -> u16 {
-                            self.ch.ndtr.read().bits() as u16
-                        }
-
-                        unsafe fn cr(&mut self) -> &dma1::ch::CR {
-                            &self.ch.cr
-                        }
-
-                        fn get_flags(&self) -> dma::Flags {
-                            dma::Flags::from_bits_truncate(unsafe { &(*$DMAX::ptr()) }.isr.read().bits() >> ($x - 1))
-                        }
-
-                        fn clear_flags(&self, flags: dma::Flags) {
-                            unsafe { &(*$DMAX::ptr()) }.ifcr.write(|w| unsafe { w.bits(flags.bits() << ($x - 1)) });
-                        }
-                    }
-                )+
-
-                impl DmaExt for $DMAX {
-                    type Channels = Channels;
-
-                    fn split(self, ahb: &mut AHB) -> Channels {
-                        $DMAX::enable(ahb);
-
-                        let dma1::RegisterBlock {$($chX),+, ..} = unsafe {&*Self::ptr()};
-
-                        // reset the DMA control registers (stops all on-going transfers)
-                        $(
-                            $chX.cr.reset();
-                        )+
-
-                        Channels{ $($chX: $CX { ch: $chX }),+ }
-                    }
+                fn clear_flags(&self, flags: dma::Flags) {
+                    unsafe { &(*pac::$DMAX::ptr()) }.ifcr.write(|w| unsafe { w.bits(flags.bits() << ($x - 1)) });
                 }
             }
         )+
+
+        impl dma::DmaExt for pac::$DMAX {
+            type Channels = Channels;
+
+            fn split(self, ahb: &mut rcc::AHB) -> Channels {
+                pac::$DMAX::enable(ahb);
+
+                let pac::dma1::RegisterBlock {$($chX),+, ..} = unsafe {&*Self::ptr()};
+
+                // reset the DMA control registers (stops all on-going transfers)
+                $(
+                    $chX.cr.reset();
+                )+
+
+                Channels{ $($chX: $CX { ch: $chX }),+ }
+            }
+        }
     }
 }
 
-dma! {
-    DMA1: (dma1, {
-        C1: (
-            ch1, 1,
-        ),
-        C2: (
-            ch2, 2,
-        ),
-        C3: (
-            ch3, 3,
-        ),
-        C4: (
-            ch4, 4,
-        ),
-        C5: (
-            ch5, 5,
-        ),
-        C6: (
-            ch6, 6,
-        ),
-        C7: (
-            ch7, 7,
-        ),
-    }),
-
-    DMA2: (dma2, {
-        C1: (
-            ch1, 1,
-        ),
-        C2: (
-            ch2, 2,
-        ),
-        C3: (
-            ch3, 3,
-        ),
-        C4: (
-            ch4, 4,
-        ),
-        C5: (
-            ch5, 5,
-        ),
-    }),
+pub mod dma1 {
+    dma! {
+        DMA1: {
+            C1: (ch1, 1),
+            C2: (ch2, 2),
+            C3: (ch3, 3),
+            C4: (ch4, 4),
+            C5: (ch5, 5),
+            C6: (ch6, 6),
+            C7: (ch7, 7),
+        }
+    }
 }
-
+pub mod dma2 {
+    dma! {
+        DMA2: {
+            C1: (ch1, 1),
+            C2: (ch2, 2),
+            C3: (ch3, 3),
+            C4: (ch4, 4),
+            C5: (ch5, 5),
+        }
+    }
+}
 pub trait ChannelLowLevel: Sized {
     /// Associated peripheral `address`
     unsafe fn set_par(&mut self, address: u32);
