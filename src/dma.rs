@@ -633,6 +633,12 @@ where
     pub fn split(self) -> (CHANNEL, PERIPH) {
         (self.channel, self.periph)
     }
+
+    fn start(&mut self, address: u32, len: usize, circular: bool) {
+        self.channel.set_memory_address(address);
+        self.channel.set_transfer_length(len);
+        self.channel.start(Some(circular));
+    }
 }
 
 impl<CHANNEL, PERIPH> PeriphChannel<CHANNEL, PERIPH>
@@ -640,18 +646,38 @@ where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph<Direction = R>,
 {
-    pub fn send_linear<B>(mut self, mut buffer: B) -> LinearTransfer<CHANNEL, PERIPH, B>
+    pub fn recieve_linear<BUFFER>(
+        mut self,
+        buffer: BUFFER,
+    ) -> LinearTransfer<CHANNEL, PERIPH, BUFFER>
     where
-        B: StaticWriteBuffer<Word = PERIPH::MemWord>,
+        BUFFER: StaticReadBuffer<Word = PERIPH::MemWord>,
     {
-        let (ptr, len) = unsafe { buffer.static_write_buffer() };
-        self.channel.set_memory_address(ptr as u32);
-        self.channel.set_transfer_length(len);
-        self.channel.start(Some(false));
+        let (ptr, len) = unsafe { buffer.static_read_buffer() };
+
+        self.start(ptr as u32, len, false);
 
         LinearTransfer {
             periph_channel: self,
             buffer,
+        }
+    }
+
+    pub fn recieve_circular<HALFBUFFER>(
+        mut self,
+        buffer: [HALFBUFFER; 2],
+    ) -> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
+    where
+        HALFBUFFER: StaticReadBuffer<Word = PERIPH::MemWord>,
+    {
+        let (ptr, half_len) = unsafe { buffer[0].static_read_buffer() };
+
+        self.start(ptr as u32, half_len * 2, true);
+
+        CircularTransfer {
+            periph_channel: self,
+            buffer,
+            next_half: Half::First,
         }
     }
 }
@@ -661,18 +687,35 @@ where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph<Direction = W>,
 {
-    pub fn recieve_linear<B>(mut self, buffer: B) -> LinearTransfer<CHANNEL, PERIPH, B>
+    pub fn send_linear<B>(mut self, mut buffer: B) -> LinearTransfer<CHANNEL, PERIPH, B>
     where
-        B: StaticReadBuffer<Word = PERIPH::MemWord>,
+        B: StaticWriteBuffer<Word = PERIPH::MemWord>,
     {
-        let (ptr, len) = unsafe { buffer.static_read_buffer() };
-        self.channel.set_memory_address(ptr as u32);
-        self.channel.set_transfer_length(len);
-        self.channel.start(Some(false));
+        let (ptr, len) = unsafe { buffer.static_write_buffer() };
+
+        self.start(ptr as u32, len, false);
 
         LinearTransfer {
             periph_channel: self,
             buffer,
+        }
+    }
+
+    pub fn send_circular<HALFBUFFER>(
+        mut self,
+        mut buffer: [HALFBUFFER; 2],
+    ) -> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
+    where
+        HALFBUFFER: StaticWriteBuffer<Word = PERIPH::MemWord>,
+    {
+        let (ptr, half_len) = unsafe { buffer[0].static_write_buffer() };
+
+        self.start(ptr as u32, half_len * 2, true);
+
+        CircularTransfer {
+            periph_channel: self,
+            buffer,
+            next_half: Half::First,
         }
     }
 }
@@ -750,5 +793,91 @@ where
         let capacity = slice.len();
 
         Ok(&mut slice[..(capacity - pending)])
+    }
+}
+
+pub struct CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaPeriph,
+{
+    periph_channel: PeriphChannel<CHANNEL, PERIPH>,
+    buffer: [HALFBUFFER; 2],
+    next_half: Half,
+}
+
+impl<CHANNEL, PERIPH, HALFBUFFER> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
+where
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaPeriph,
+{
+    fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, [HALFBUFFER; 2]) {
+        self.periph_channel.channel.stop();
+        (self.periph_channel, self.buffer)
+    }
+
+    fn accessable_half(&self) -> Result<Option<Half>> {
+        let flags = self.periph_channel.channel.get_flags();
+        if flags.contains(Flags::TRANSFER_ERROR) {
+            Err(Error::TransferError)
+        } else if flags.contains(Flags::HALF_TRANSFER & Flags::TRANSFER_COMPLETE) {
+            Err(Error::Overrun)
+        } else if flags.contains(Flags::HALF_TRANSFER) {
+            Ok(Some(Half::First))
+        } else if flags.contains(Flags::TRANSFER_COMPLETE) {
+            Ok(Some(Half::Second))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn poll(&self) -> ResultNonBlocking<()> {
+        self.periph_channel.channel.clear_flags(Flags::GLOBAL);
+        if self.accessable_half()? == Some(self.next_half) {
+            Ok(())
+        } else {
+            Err(nb::Error::WouldBlock)
+        }
+    }
+
+    fn mark_half_done(&mut self) -> Result<()> {
+        if self.accessable_half()? != Some(self.next_half) {
+            Err(Error::Overrun)
+        } else {
+            self.next_half = match self.next_half {
+                Half::First => {
+                    self.periph_channel
+                        .channel
+                        .clear_flags(Flags::HALF_TRANSFER);
+                    Half::Second
+                }
+                Half::Second => {
+                    self.periph_channel
+                        .channel
+                        .clear_flags(Flags::TRANSFER_COMPLETE);
+                    Half::First
+                }
+            };
+            Ok(())
+        }
+    }
+
+    pub fn peek<R, F>(&mut self, f: F) -> ResultNonBlocking<R>
+    where
+        F: FnOnce(&mut HALFBUFFER) -> R,
+    {
+        self.poll()?;
+
+        let buf = match self.next_half {
+            Half::First => &mut self.buffer[0],
+            Half::Second => &mut self.buffer[1],
+        };
+
+        // XXX does this need a compiler barrier?
+        let ret = f(buf);
+
+        self.mark_half_done()?;
+
+        Ok(ret)
     }
 }
