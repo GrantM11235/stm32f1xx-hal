@@ -40,10 +40,8 @@ use crate::pac::SPI3;
 use crate::pac::{SPI1, SPI2};
 
 use crate::afio::MAPR;
-use crate::dma::dma1::{C3, C5};
 #[cfg(feature = "connectivity")]
 use crate::dma::dma2::C2;
-use crate::dma::{Transfer, TransferPayload, Transmit, TxDma, R};
 use crate::gpio::gpioa::{PA5, PA6, PA7};
 use crate::gpio::gpiob::{PB13, PB14, PB15, PB3, PB4, PB5};
 #[cfg(feature = "connectivity")]
@@ -51,9 +49,6 @@ use crate::gpio::gpioc::{PC10, PC11, PC12};
 use crate::gpio::{Alternate, Floating, Input, PushPull};
 use crate::rcc::{Clocks, Enable, GetBusFreq, Reset, APB1, APB2};
 use crate::time::Hertz;
-
-use core::sync::atomic::{self, Ordering};
-use embedded_dma::StaticReadBuffer;
 
 /// SPI error
 #[derive(Debug)]
@@ -517,6 +512,7 @@ where
 
 // DMA
 
+/*
 pub struct SpiPayload<SPI, REMAP, PINS> {
     spi: Spi<SPI, REMAP, PINS, u8>,
 }
@@ -605,3 +601,4 @@ spi_dma!(SPI1, C3);
 spi_dma!(SPI2, C5);
 #[cfg(feature = "connectivity")]
 spi_dma!(SPI3, C2);
+*/

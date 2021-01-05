@@ -40,15 +40,12 @@
 use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ptr;
-use core::sync::atomic::{self, Ordering};
 
 use crate::pac::{USART1, USART2, USART3};
 use core::convert::Infallible;
-use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
 use embedded_hal::serial::Write;
 
 use crate::afio::MAPR;
-use crate::dma::{dma1, CircBuffer, RxDma, Transfer, TxDma, R, W};
 use crate::gpio::gpioa::{PA10, PA2, PA3, PA9};
 use crate::gpio::gpiob::{PB10, PB11, PB6, PB7};
 use crate::gpio::gpioc::{PC10, PC11};
@@ -502,6 +499,7 @@ pub type Tx2 = Tx<USART2>;
 pub type Rx3 = Rx<USART3>;
 pub type Tx3 = Tx<USART3>;
 
+/*
 use crate::dma::{Receive, TransferPayload, Transmit};
 
 macro_rules! serialdma {
@@ -695,3 +693,4 @@ serialdma! {
         dma1::C2,
     ),
 }
+*/

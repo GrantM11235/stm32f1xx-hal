@@ -1,15 +1,11 @@
 //! # API for the Analog to Digital converter
 
-use core::marker::PhantomData;
 use embedded_hal::adc::{Channel, OneShot};
 
-use crate::dma::{dma1::C1, CircBuffer, Receive, RxDma, Transfer, TransferPayload, W};
 use crate::gpio::Analog;
 use crate::gpio::{gpioa, gpiob, gpioc};
 use crate::rcc::{Clocks, Enable, Reset, APB2};
-use core::sync::atomic::{self, Ordering};
 use cortex_m::asm::delay;
-use embedded_dma::StaticWriteBuffer;
 
 use crate::pac::ADC1;
 #[cfg(feature = "stm32f103")]
@@ -533,11 +529,13 @@ adc_hal! {
     ADC3: (adc3),
 }
 
+/*
 pub struct AdcPayload<PINS, MODE> {
     adc: Adc<ADC1>,
     pins: PINS,
     _mode: PhantomData<MODE>,
 }
+*/
 
 pub trait ChannelTimeSequence {
     /// Set ADC sampling time for particular channel
@@ -580,6 +578,7 @@ pub trait SetChannels<PINS>: ChannelTimeSequence {
     fn set_sequence(&mut self);
 }
 
+/*
 pub type AdcDma<PINS, MODE> = RxDma<AdcPayload<PINS, MODE>, C1>;
 
 impl<PINS, MODE> Receive for AdcDma<PINS, MODE> {
@@ -771,3 +770,4 @@ where
         Transfer::w(buffer, self)
     }
 }
+*/
