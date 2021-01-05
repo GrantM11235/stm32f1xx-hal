@@ -180,24 +180,6 @@ pub trait ChannelLowLevel: Sized {
 
     fn clear_flags(&self, flags: Flags);
 
-    /// Starts the DMA transfer
-    fn start(&mut self, circular: Option<bool>) {
-        match circular {
-            Some(circ) => {
-                self.cr().modify(|_, w| w.en().set_bit().circ().bit(circ));
-            }
-            None => {
-                self.cr().modify(|_, w| w.en().set_bit());
-            }
-        }
-    }
-
-    /// Stops the DMA transfer
-    fn stop(&mut self) {
-        self.cr().modify(|_, w| w.en().clear_bit());
-        self.clear_flags(Flags::all());
-    }
-
     fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<Self, PERIPH>
     where
         PERIPH: DmaPeriph<Channel = Self>,
@@ -300,7 +282,19 @@ where
     fn start(&mut self, address: u32, len: usize, circular: bool) {
         self.channel.set_mar(address);
         self.channel.set_ndt(len.try_into().unwrap());
-        self.channel.start(Some(circular));
+        self.channel
+            .cr()
+            .modify(|_, w| w.en().enabled().circ().bit(circular));
+    }
+
+    fn stop(&mut self) {
+        self.channel.cr().modify(|_, w| w.en().clear_bit());
+        self.channel.clear_flags(Flags::all());
+    }
+
+    fn restart(&mut self) {
+        self.stop();
+        self.channel.cr().modify(|_, w| w.en().enabled());
     }
 }
 
@@ -420,7 +414,7 @@ where
     }
 
     pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, BUFFER) {
-        self.periph_channel.channel.stop();
+        self.periph_channel.stop();
         (self.periph_channel, self.buffer)
     }
 
@@ -430,8 +424,7 @@ where
     }
 
     pub fn restart(&mut self) {
-        self.periph_channel.channel.stop();
-        self.periph_channel.channel.start(Some(false));
+        self.periph_channel.restart();
     }
 
     pub fn peek<T>(&self) -> Result<&[T]>
@@ -475,7 +468,7 @@ where
     PERIPH: DmaPeriph,
 {
     fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, [HALFBUFFER; 2]) {
-        self.periph_channel.channel.stop();
+        self.periph_channel.stop();
         (self.periph_channel, self.buffer)
     }
 
