@@ -465,8 +465,8 @@ where
         (self.periph_channel, self.buffer)
     }
 
-    pub fn wait(self) -> ResultNonBlocking<(PeriphChannel<CHANNEL, PERIPH>, BUFFER)> {
-        self.poll()?;
+    pub fn wait(self) -> Result<(PeriphChannel<CHANNEL, PERIPH>, BUFFER)> {
+        nb::block!(self.poll())?;
         Ok(self.abort())
     }
 
@@ -607,11 +607,11 @@ where
         (self.channel, self.source, self.dest)
     }
 
-    pub fn wait(self) -> ResultNonBlocking<(CHANNEL, SOURCE, DEST)> {
+    pub fn poll(self) -> ResultNonBlocking<()> {
         if self.channel.get_ndt() != 0 {
             Err(nb::Error::WouldBlock)
         } else {
-            Ok(self.abort())
+            Ok(())
         }
     }
 }
