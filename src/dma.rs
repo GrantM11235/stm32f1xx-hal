@@ -67,15 +67,15 @@ macro_rules! dma {
                     pub struct $CX { ch: &'static dma1::CH }
 
                     impl ChannelLowLevel for $CX {
-                        fn set_par(&mut self, address: u32) {
+                        unsafe fn set_par(&mut self, address: u32) {
                             self.ch.par.write(|w| w.pa().bits(address) );
                         }
 
-                        fn set_mar(&mut self, address: u32) {
+                        unsafe fn set_mar(&mut self, address: u32) {
                             self.ch.mar.write(|w| w.ma().bits(address) );
                         }
 
-                        fn set_ndt(&mut self, len: u16) {
+                        unsafe fn set_ndt(&mut self, len: u16) {
                             self.ch.ndtr.write(|w| w.ndt().bits(len));
                         }
 
@@ -83,7 +83,7 @@ macro_rules! dma {
                             self.ch.ndtr.read().bits() as u16
                         }
 
-                        fn cr(&mut self) -> &dma1::ch::CR {
+                        unsafe fn cr(&mut self) -> &dma1::ch::CR {
                             &self.ch.cr
                         }
 
@@ -164,17 +164,17 @@ dma! {
 
 pub trait ChannelLowLevel: Sized {
     /// Associated peripheral `address`
-    fn set_par(&mut self, address: u32);
+    unsafe fn set_par(&mut self, address: u32);
 
     /// `address` where from/to data will be read/write
-    fn set_mar(&mut self, address: u32);
+    unsafe fn set_mar(&mut self, address: u32);
 
     /// Number of bytes to transfer
-    fn set_ndt(&mut self, len: u16);
+    unsafe fn set_ndt(&mut self, len: u16);
 
     fn get_ndt(&self) -> u16;
 
-    fn cr(&mut self) -> &pac::dma1::ch::CR;
+    unsafe fn cr(&mut self) -> &pac::dma1::ch::CR;
 
     fn get_flags(&self) -> Flags;
 
@@ -184,34 +184,36 @@ pub trait ChannelLowLevel: Sized {
     where
         PERIPH: DmaPeriph<Channel = Self>,
     {
-        self.cr().reset();
-        self.set_par(periph.address());
-        self.cr().write(|w| {
-            w.mem2mem()
-                .disabled()
-                .pl()
-                .medium()
-                .msize()
-                .variant(PERIPH::MemWord::SIZE)
-                .psize()
-                .variant(PERIPH::PeriphWord::SIZE)
-                .circ()
-                .disabled()
-                .minc()
-                .enabled()
-                .pinc()
-                .enabled()
-                .dir()
-                .variant(PERIPH::Direction::DIRECTION)
-                .teie()
-                .disabled()
-                .htie()
-                .disabled()
-                .tcie()
-                .disabled()
-                .en()
-                .disabled()
-        });
+        unsafe {
+            self.cr().reset();
+            self.set_par(periph.address());
+            self.cr().write(|w| {
+                w.mem2mem()
+                    .disabled()
+                    .pl()
+                    .medium()
+                    .msize()
+                    .variant(PERIPH::MemWord::SIZE)
+                    .psize()
+                    .variant(PERIPH::PeriphWord::SIZE)
+                    .circ()
+                    .disabled()
+                    .minc()
+                    .enabled()
+                    .pinc()
+                    .enabled()
+                    .dir()
+                    .variant(PERIPH::Direction::DIRECTION)
+                    .teie()
+                    .disabled()
+                    .htie()
+                    .disabled()
+                    .tcie()
+                    .disabled()
+                    .en()
+                    .disabled()
+            });
+        }
         PeriphChannel {
             channel: self,
             periph,
@@ -253,7 +255,7 @@ impl Direction for Tx {
     const DIRECTION: pac::dma1::ch::cr::DIR_A = pac::dma1::ch::cr::DIR_A::FROMMEMORY;
 }
 
-pub trait DmaPeriph {
+pub unsafe trait DmaPeriph {
     type Direction: Direction;
     type PeriphWord: DmaWord;
     type MemWord: DmaWord;
@@ -279,7 +281,7 @@ where
         (self.channel, self.periph)
     }
 
-    fn start(&mut self, address: u32, len: usize, circular: bool) {
+    unsafe fn start(&mut self, address: u32, len: usize, circular: bool) {
         self.channel.set_mar(address);
         self.channel.set_ndt(len.try_into().unwrap());
         self.channel
@@ -288,13 +290,13 @@ where
     }
 
     fn stop(&mut self) {
-        self.channel.cr().modify(|_, w| w.en().clear_bit());
+        unsafe { self.channel.cr().modify(|_, w| w.en().clear_bit()) };
         self.channel.clear_flags(Flags::all());
     }
 
     fn restart(&mut self) {
         self.stop();
-        self.channel.cr().modify(|_, w| w.en().enabled());
+        unsafe { self.channel.cr().modify(|_, w| w.en().enabled()) };
     }
 }
 
@@ -312,7 +314,7 @@ where
     {
         let (ptr, len) = unsafe { buffer.static_read_buffer() };
 
-        self.start(ptr as u32, len, false);
+        unsafe { self.start(ptr as u32, len, false) };
 
         LinearTransfer {
             periph_channel: self,
@@ -329,7 +331,7 @@ where
     {
         let (ptr, half_len) = unsafe { buffer[0].static_read_buffer() };
 
-        self.start(ptr as u32, half_len * 2, true);
+        unsafe { self.start(ptr as u32, half_len * 2, true) };
 
         CircularTransfer {
             periph_channel: self,
@@ -350,7 +352,7 @@ where
     {
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
 
-        self.start(ptr as u32, len, false);
+        unsafe { self.start(ptr as u32, len, false) };
 
         LinearTransfer {
             periph_channel: self,
@@ -367,7 +369,7 @@ where
     {
         let (ptr, half_len) = unsafe { buffer[0].static_write_buffer() };
 
-        self.start(ptr as u32, half_len * 2, true);
+        unsafe { self.start(ptr as u32, half_len * 2, true) };
 
         CircularTransfer {
             periph_channel: self,
