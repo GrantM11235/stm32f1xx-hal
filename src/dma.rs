@@ -179,46 +179,6 @@ pub trait ChannelLowLevel: Sized {
     fn get_flags(&self) -> Flags;
 
     fn clear_flags(&self, flags: Flags);
-
-    fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<Self, PERIPH>
-    where
-        PERIPH: DmaPeriph<Channel = Self>,
-    {
-        unsafe {
-            self.cr().reset();
-            self.set_par(periph.address());
-            self.cr().write(|w| {
-                w.mem2mem()
-                    .disabled()
-                    .pl()
-                    .medium()
-                    .msize()
-                    .variant(PERIPH::MemWord::SIZE)
-                    .psize()
-                    .variant(PERIPH::PeriphWord::SIZE)
-                    .circ()
-                    .disabled()
-                    .minc()
-                    .enabled()
-                    .pinc()
-                    .enabled()
-                    .dir()
-                    .variant(PERIPH::Direction::DIRECTION)
-                    .teie()
-                    .disabled()
-                    .htie()
-                    .disabled()
-                    .tcie()
-                    .disabled()
-                    .en()
-                    .disabled()
-            });
-        }
-        PeriphChannel {
-            channel: self,
-            periph,
-        }
-    }
 }
 
 pub trait DmaWord {
@@ -261,6 +221,43 @@ pub unsafe trait DmaPeriph {
     type MemWord: DmaWord;
     type Channel: ChannelLowLevel;
     fn address(&self) -> u32;
+
+    fn configure_channel(self, channel: Self::Channel) -> PeriphChannel<Self::Channel, Self> {
+        unsafe {
+            channel.cr().reset();
+            channel.set_par(self.address());
+            channel.cr().write(|w| {
+                w.mem2mem()
+                    .disabled()
+                    .pl()
+                    .medium()
+                    .msize()
+                    .variant(Self::MemWord::SIZE)
+                    .psize()
+                    .variant(Self::PeriphWord::SIZE)
+                    .circ()
+                    .disabled()
+                    .minc()
+                    .enabled()
+                    .pinc()
+                    .enabled()
+                    .dir()
+                    .variant(Self::Direction::DIRECTION)
+                    .teie()
+                    .disabled()
+                    .htie()
+                    .disabled()
+                    .tcie()
+                    .disabled()
+                    .en()
+                    .disabled()
+            });
+        }
+        PeriphChannel {
+            channel,
+            periph: self,
+        }
+    }
 }
 
 pub struct PeriphChannel<CHANNEL, PERIPH>
