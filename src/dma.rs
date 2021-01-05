@@ -1,5 +1,4 @@
 //! # Direct Memory Access
-#![allow(dead_code)]
 
 use core::convert::TryInto;
 
@@ -15,17 +14,6 @@ pub enum Error {
     TransferError,
 }
 
-pub enum Event {
-    HalfTransfer,
-    TransferComplete,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Half {
-    First,
-    Second,
-}
-
 bitflags::bitflags! {
     pub struct Flags: u32 {
         const GLOBAL = 0b0001;
@@ -33,6 +21,12 @@ bitflags::bitflags! {
         const HALF_TRANSFER = 0b0100;
         const TRANSFER_ERROR = 0b1000;
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Half {
+    First,
+    Second,
 }
 
 type Result<T> = core::result::Result<T, Error>;
@@ -63,6 +57,8 @@ macro_rules! dma {
             ///
             /// This singleton has exclusive access to the registers of the DMAx channel X
             pub struct $CX { ch: &'static pac::dma1::CH }
+
+            impl dma::private::Sealed for $CX {}
 
             impl dma::ChannelLowLevel for $CX {
                 unsafe fn set_par(&mut self, address: u32) {
@@ -138,7 +134,8 @@ pub mod dma2 {
         }
     }
 }
-pub trait ChannelLowLevel: Sized {
+
+pub trait ChannelLowLevel: Sized + private::Sealed {
     /// Associated peripheral `address`
     unsafe fn set_par(&mut self, address: u32);
 
@@ -197,6 +194,10 @@ pub trait ChannelLowLevel: Sized {
     }
 }
 
+mod private {
+    pub trait Sealed {}
+}
+
 pub trait DmaWord {
     const SIZE: pac::dma1::ch::cr::PSIZE_A;
 }
@@ -237,6 +238,13 @@ pub unsafe trait DmaPeriph {
     type MemWord: DmaWord;
     type Channel: ChannelLowLevel;
     fn address(&self) -> u32;
+
+    fn configure_channel(self, channel: Self::Channel) -> PeriphChannel<Self::Channel, Self>
+    where
+        Self: Sized,
+    {
+        channel.take_periph(self)
+    }
 }
 
 pub struct PeriphChannel<CHANNEL, PERIPH>
@@ -445,7 +453,7 @@ where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, [HALFBUFFER; 2]) {
+    pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, [HALFBUFFER; 2]) {
         self.periph_channel.stop();
         (self.periph_channel, self.buffer)
     }
