@@ -3,7 +3,8 @@
 
 use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
 
-use crate::rcc::AHB;
+use crate::pac;
+use crate::rcc;
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -38,7 +39,7 @@ type ResultNonBlocking<T> = nb::Result<T, Error>;
 pub trait DmaExt {
     type Channels;
 
-    fn split(self, ahb: &mut AHB) -> Self::Channels;
+    fn split(self, ahb: &mut rcc::AHB) -> Self::Channels;
 }
 
 macro_rules! dma {
@@ -214,7 +215,7 @@ pub trait ChannelLowLevel: Sized {
         }
     }
 
-    fn cr(&mut self) -> &crate::pac::dma1::ch::CR;
+    fn cr(&mut self) -> &pac::dma1::ch::CR;
 
     fn get_ndtr(&self) -> u32;
 
@@ -261,19 +262,19 @@ pub trait ChannelLowLevel: Sized {
 }
 
 pub trait DmaWord {
-    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A;
+    const SIZE: pac::dma1::ch::cr::PSIZE_A;
 }
 
 impl DmaWord for u8 {
-    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS8;
+    const SIZE: pac::dma1::ch::cr::PSIZE_A = pac::dma1::ch::cr::PSIZE_A::BITS8;
 }
 
 impl DmaWord for u16 {
-    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS16;
+    const SIZE: pac::dma1::ch::cr::PSIZE_A = pac::dma1::ch::cr::PSIZE_A::BITS16;
 }
 
 impl DmaWord for u32 {
-    const SIZE: crate::pac::dma1::ch::cr::PSIZE_A = crate::pac::dma1::ch::cr::PSIZE_A::BITS32;
+    const SIZE: pac::dma1::ch::cr::PSIZE_A = pac::dma1::ch::cr::PSIZE_A::BITS32;
 }
 
 /// Read transfer
@@ -283,17 +284,15 @@ pub struct Rx;
 pub struct Tx;
 
 pub trait Direction {
-    const DIRECTION: stm32f1::stm32f103::dma1::ch::cr::DIR_A;
+    const DIRECTION: pac::dma1::ch::cr::DIR_A;
 }
 
 impl Direction for Rx {
-    const DIRECTION: stm32f1::stm32f103::dma1::ch::cr::DIR_A =
-        stm32f1::stm32f103::dma1::ch::cr::DIR_A::FROMPERIPHERAL;
+    const DIRECTION: pac::dma1::ch::cr::DIR_A = pac::dma1::ch::cr::DIR_A::FROMPERIPHERAL;
 }
 
 impl Direction for Tx {
-    const DIRECTION: stm32f1::stm32f103::dma1::ch::cr::DIR_A =
-        stm32f1::stm32f103::dma1::ch::cr::DIR_A::FROMMEMORY;
+    const DIRECTION: pac::dma1::ch::cr::DIR_A = pac::dma1::ch::cr::DIR_A::FROMMEMORY;
 }
 
 pub trait DmaPeriph {
