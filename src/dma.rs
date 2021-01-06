@@ -1,8 +1,9 @@
 //! # Direct Memory Access
 
-use core::convert::TryInto;
+use core::{convert::TryInto, task::Poll};
 
 use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
+use futures::{future::poll_fn, Future};
 
 use crate::pac;
 use crate::rcc;
@@ -334,14 +335,20 @@ where
             .modify(|_, w| w.en().enabled().circ().bit(circular));
     }
 
+    fn poll(&self) -> impl Future<Output = ()> + '_ {
+        poll_fn(move |cx| {
+            if self.channel.get_ndt() == 0 {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
     fn stop(&mut self) {
         unsafe { self.channel.cr().modify(|_, w| w.en().clear_bit()) };
         self.channel.clear_flags(Flags::all());
-    }
-
-    fn restart(&mut self) {
-        self.stop();
-        unsafe { self.channel.cr().modify(|_, w| w.en().enabled()) };
     }
 }
 
@@ -350,10 +357,7 @@ where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph<Direction = Rx>,
 {
-    pub fn recieve_linear<BUFFER>(
-        mut self,
-        buffer: BUFFER,
-    ) -> LinearTransfer<CHANNEL, PERIPH, BUFFER>
+    pub async fn recieve_async<BUFFER>(&mut self, buffer: BUFFER) -> BUFFER
     where
         BUFFER: StaticReadBuffer<Word = PERIPH::MemWord>,
     {
@@ -361,10 +365,11 @@ where
 
         unsafe { self.start(ptr as u32, len, false) };
 
-        LinearTransfer {
-            periph_channel: self,
-            buffer,
-        }
+        self.poll().await;
+
+        self.stop();
+
+        buffer
     }
 
     pub fn recieve_circular<HALFBUFFER>(
@@ -391,18 +396,19 @@ where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph<Direction = Tx>,
 {
-    pub fn send_linear<B>(mut self, mut buffer: B) -> LinearTransfer<CHANNEL, PERIPH, B>
+    pub async fn send_async<BUFFER>(&mut self, mut buffer: BUFFER) -> BUFFER
     where
-        B: StaticWriteBuffer<Word = PERIPH::MemWord>,
+        BUFFER: StaticWriteBuffer<Word = PERIPH::MemWord>,
     {
         let (ptr, len) = unsafe { buffer.static_write_buffer() };
 
         unsafe { self.start(ptr as u32, len, false) };
 
-        LinearTransfer {
-            periph_channel: self,
-            buffer,
-        }
+        self.poll().await;
+
+        self.stop();
+
+        buffer
     }
 
     pub fn send_circular<HALFBUFFER>(
@@ -421,81 +427,6 @@ where
             buffer,
             next_half: Half::First,
         }
-    }
-}
-
-pub struct LinearTransfer<CHANNEL, PERIPH, BUFFER>
-where
-    CHANNEL: ChannelLowLevel,
-    PERIPH: DmaPeriph,
-{
-    periph_channel: PeriphChannel<CHANNEL, PERIPH>,
-    buffer: BUFFER,
-}
-
-impl<CHANNEL, PERIPH, BUFFER> LinearTransfer<CHANNEL, PERIPH, BUFFER>
-where
-    CHANNEL: ChannelLowLevel,
-    PERIPH: DmaPeriph,
-{
-    pub fn get_remaining_transfers(&self) -> Result<u16> {
-        if self
-            .periph_channel
-            .channel
-            .get_flags()
-            .contains(Flags::TRANSFER_ERROR)
-        {
-            Err(Error::TransferError)
-        } else {
-            Ok(self.periph_channel.channel.get_ndt())
-        }
-    }
-
-    pub fn poll(&self) -> ResultNonBlocking<()> {
-        let remaining = self.get_remaining_transfers()?;
-        if remaining == 0 {
-            Ok(())
-        } else {
-            Err(nb::Error::WouldBlock)
-        }
-    }
-
-    pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, BUFFER) {
-        self.periph_channel.stop();
-        (self.periph_channel, self.buffer)
-    }
-
-    pub fn wait(self) -> Result<(PeriphChannel<CHANNEL, PERIPH>, BUFFER)> {
-        nb::block!(self.poll())?;
-        Ok(self.abort())
-    }
-
-    pub fn restart(&mut self) {
-        self.periph_channel.restart();
-    }
-
-    pub fn peek<T>(&self) -> Result<&[T]>
-    where
-        BUFFER: AsRef<[T]>,
-    {
-        let pending = self.get_remaining_transfers()? as usize;
-
-        let slice = self.buffer.as_ref();
-        let capacity = slice.len();
-
-        Ok(&slice[..(capacity - pending)])
-    }
-
-    pub fn peek_mut<T>(&mut self) -> Result<&mut [T]>
-    where
-        BUFFER: AsMut<[T]>,
-    {
-        let pending = self.get_remaining_transfers()? as usize;
-
-        let slice = self.buffer.as_mut();
-        let capacity = slice.len();
-
-        Ok(&mut slice[..(capacity - pending)])
     }
 }
 
