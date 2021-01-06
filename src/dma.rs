@@ -386,7 +386,6 @@ where
         CircularTransfer {
             periph_channel: self,
             buffer,
-            next_half: Half::First,
         }
     }
 }
@@ -425,7 +424,6 @@ where
         CircularTransfer {
             periph_channel: self,
             buffer,
-            next_half: Half::First,
         }
     }
 }
@@ -437,7 +435,6 @@ where
 {
     periph_channel: PeriphChannel<CHANNEL, PERIPH>,
     buffer: [HALFBUFFER; 2],
-    next_half: Half,
 }
 
 impl<CHANNEL, PERIPH, HALFBUFFER> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
@@ -465,44 +462,44 @@ where
         }
     }
 
-    fn poll(&self) -> ResultNonBlocking<()> {
-        self.periph_channel.channel.clear_flags(Flags::GLOBAL);
-        if self.accessable_half()? == Some(self.next_half) {
-            Ok(())
-        } else {
-            Err(nb::Error::WouldBlock)
-        }
+    fn poll(&self) -> impl Future<Output = Result<Half>> + '_ {
+        poll_fn(move |cx| {
+            self.periph_channel.channel.clear_flags(Flags::GLOBAL);
+            match self.accessable_half() {
+                Ok(Some(half)) => Poll::Ready(Ok(half)),
+                Ok(None) => {
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                }
+                Err(e) => Poll::Ready(Err(e)),
+            }
+        })
     }
 
     fn mark_half_done(&mut self) -> Result<()> {
-        if self.accessable_half()? != Some(self.next_half) {
-            Err(Error::Overrun)
-        } else {
-            self.next_half = match self.next_half {
-                Half::First => {
-                    self.periph_channel
-                        .channel
-                        .clear_flags(Flags::HALF_TRANSFER);
-                    Half::Second
-                }
-                Half::Second => {
-                    self.periph_channel
-                        .channel
-                        .clear_flags(Flags::TRANSFER_COMPLETE);
-                    Half::First
-                }
-            };
-            Ok(())
+        // Panics if there is no accessable half
+        let half = self.accessable_half()?.unwrap();
+
+        match half {
+            Half::First => {
+                self.periph_channel
+                    .channel
+                    .clear_flags(Flags::HALF_TRANSFER);
+            }
+            Half::Second => {
+                self.periph_channel
+                    .channel
+                    .clear_flags(Flags::TRANSFER_COMPLETE);
+            }
         }
+        Ok(())
     }
 
-    pub fn peek<R, F>(&mut self, f: F) -> ResultNonBlocking<R>
+    pub async fn peek<R, F>(&mut self, f: F) -> Result<R>
     where
         F: FnOnce(&mut HALFBUFFER) -> R,
     {
-        self.poll()?;
-
-        let buf = match self.next_half {
+        let buf = match self.poll().await? {
             Half::First => &mut self.buffer[0],
             Half::Second => &mut self.buffer[1],
         };
