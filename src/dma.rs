@@ -156,112 +156,105 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
     fn clear_flags(&self, flags: Flags);
 }
 
-pub struct ChannelHighLevel<CX>(CX)
-where
-    CX: ChannelLowLevel;
-
-impl<CX> ChannelHighLevel<CX>
+fn poll<CX>(channel: &CX) -> impl Future<Output = ()> + '_
 where
     CX: ChannelLowLevel,
 {
-    fn poll(&self) -> impl Future<Output = ()> + '_ {
-        poll_fn(move |cx| {
-            if self.0.get_ndt() == 0 {
-                Poll::Ready(())
-            } else {
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
+    poll_fn(move |cx| {
+        if channel.get_ndt() == 0 {
+            Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+}
+
+fn take_periph<CX, PERIPH>(mut channel: CX, periph: PERIPH) -> PeriphChannel<CX, PERIPH>
+where
+    CX: ChannelLowLevel,
+    PERIPH: DmaPeriph<CX = CX>,
+{
+    unsafe {
+        channel.cr().reset();
+        channel.set_par(periph.address());
+        channel.cr().write(|w| {
+            w.mem2mem()
+                .disabled()
+                .pl()
+                .medium()
+                .msize()
+                .variant(PERIPH::MemWord::SIZE)
+                .psize()
+                .variant(PERIPH::PeriphWord::SIZE)
+                .circ()
+                .disabled()
+                .minc()
+                .enabled()
+                .pinc()
+                .enabled()
+                .dir()
+                .variant(PERIPH::Direction::DIRECTION)
+                .teie()
+                .disabled()
+                .htie()
+                .disabled()
+                .tcie()
+                .disabled()
+                .en()
+                .disabled()
+        });
+    }
+    PeriphChannel { channel, periph }
+}
+
+pub async fn mem_to_mem<CX, SOURCE, DEST>(
+    channel: &mut CX,
+    source: SOURCE,
+    mut dest: DEST,
+) -> (SOURCE, DEST)
+where
+    CX: ChannelLowLevel,
+    SOURCE: StaticReadBuffer,
+    <SOURCE as StaticReadBuffer>::Word: DmaWord,
+    DEST: StaticWriteBuffer,
+    <DEST as StaticWriteBuffer>::Word: DmaWord,
+{
+    let (source_ptr, source_len) = unsafe { source.static_read_buffer() };
+    let (dest_ptr, dest_len) = unsafe { dest.static_write_buffer() };
+
+    assert_eq!(source_len, dest_len);
+
+    let len: u16 = source_len.try_into().unwrap();
+
+    unsafe {
+        channel.cr().reset();
+        channel.set_par(source_ptr as u32);
+        channel.set_mar(dest_ptr as u32);
+        channel.set_ndt(len);
+        channel.cr().write(|w| {
+            w.mem2mem()
+                .enabled()
+                .msize()
+                .variant(<DEST as StaticWriteBuffer>::Word::SIZE)
+                .psize()
+                .variant(<SOURCE as StaticReadBuffer>::Word::SIZE)
+                .minc()
+                .enabled()
+                .pinc()
+                .enabled()
+                .dir()
+                .from_peripheral()
+                .en()
+                .enabled()
         })
     }
 
-    fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<CX, PERIPH>
-    where
-        PERIPH: DmaPeriph<CX = CX>,
-    {
-        unsafe {
-            self.0.cr().reset();
-            self.0.set_par(periph.address());
-            self.0.cr().write(|w| {
-                w.mem2mem()
-                    .disabled()
-                    .pl()
-                    .medium()
-                    .msize()
-                    .variant(PERIPH::MemWord::SIZE)
-                    .psize()
-                    .variant(PERIPH::PeriphWord::SIZE)
-                    .circ()
-                    .disabled()
-                    .minc()
-                    .enabled()
-                    .pinc()
-                    .enabled()
-                    .dir()
-                    .variant(PERIPH::Direction::DIRECTION)
-                    .teie()
-                    .disabled()
-                    .htie()
-                    .disabled()
-                    .tcie()
-                    .disabled()
-                    .en()
-                    .disabled()
-            });
-        }
-        PeriphChannel {
-            channel: self,
-            periph,
-        }
-    }
+    poll(channel).await;
 
-    pub async fn mem_to_mem<SOURCE, DEST>(
-        &mut self,
-        source: SOURCE,
-        mut dest: DEST,
-    ) -> (SOURCE, DEST)
-    where
-        SOURCE: StaticReadBuffer,
-        <SOURCE as StaticReadBuffer>::Word: DmaWord,
-        DEST: StaticWriteBuffer,
-        <DEST as StaticWriteBuffer>::Word: DmaWord,
-    {
-        let (source_ptr, source_len) = unsafe { source.static_read_buffer() };
-        let (dest_ptr, dest_len) = unsafe { dest.static_write_buffer() };
+    unsafe { channel.cr().reset() };
 
-        assert_eq!(source_len, dest_len);
-
-        let len: u16 = source_len.try_into().unwrap();
-
-        unsafe {
-            self.0.cr().reset();
-            self.0.set_par(source_ptr as u32);
-            self.0.set_mar(dest_ptr as u32);
-            self.0.set_ndt(len);
-            self.0.cr().write(|w| {
-                w.mem2mem()
-                    .enabled()
-                    .msize()
-                    .variant(<DEST as StaticWriteBuffer>::Word::SIZE)
-                    .psize()
-                    .variant(<SOURCE as StaticReadBuffer>::Word::SIZE)
-                    .minc()
-                    .enabled()
-                    .pinc()
-                    .enabled()
-                    .dir()
-                    .from_peripheral()
-                    .en()
-                    .enabled()
-            })
-        }
-
-        self.poll().await;
-
-        unsafe { self.0.cr().reset() };
-
-        (source, dest)
-    }
+    (source, dest)
 }
 
 mod private {
@@ -309,11 +302,11 @@ pub unsafe trait DmaPeriph {
     type CX: ChannelLowLevel;
     fn address(&self) -> u32;
 
-    fn configure_channel(self, channel: ChannelHighLevel<Self::CX>) -> PeriphChannel<Self::CX, Self>
+    fn configure_channel(self, channel: Self::CX) -> PeriphChannel<Self::CX, Self>
     where
         Self: Sized,
     {
-        channel.take_periph(self)
+        take_periph(channel, self)
     }
 }
 
@@ -322,7 +315,7 @@ where
     CX: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    channel: ChannelHighLevel<CX>,
+    channel: CX,
     periph: PERIPH,
 }
 
@@ -331,22 +324,21 @@ where
     CX: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    pub fn split(self) -> (ChannelHighLevel<CX>, PERIPH) {
+    pub fn split(self) -> (CX, PERIPH) {
         (self.channel, self.periph)
     }
 
     unsafe fn start(&mut self, address: u32, len: usize, circular: bool) {
-        self.channel.0.set_mar(address);
-        self.channel.0.set_ndt(len.try_into().unwrap());
+        self.channel.set_mar(address);
+        self.channel.set_ndt(len.try_into().unwrap());
         self.channel
-            .0
             .cr()
             .modify(|_, w| w.en().enabled().circ().bit(circular));
     }
 
     fn poll(&self) -> impl Future<Output = ()> + '_ {
         poll_fn(move |cx| {
-            if self.channel.0.get_ndt() == 0 {
+            if self.channel.get_ndt() == 0 {
                 Poll::Ready(())
             } else {
                 cx.waker().wake_by_ref();
@@ -356,8 +348,8 @@ where
     }
 
     fn stop(&mut self) {
-        unsafe { self.channel.0.cr().modify(|_, w| w.en().clear_bit()) };
-        self.channel.0.clear_flags(Flags::all());
+        unsafe { self.channel.cr().modify(|_, w| w.en().clear_bit()) };
+        self.channel.clear_flags(Flags::all());
     }
 }
 
@@ -457,7 +449,7 @@ where
     }
 
     fn accessable_half(&self) -> Result<Option<Half>> {
-        let flags = self.periph_channel.channel.0.get_flags();
+        let flags = self.periph_channel.channel.get_flags();
         if flags.contains(Flags::TRANSFER_ERROR) {
             Err(Error::TransferError)
         } else if flags.contains(Flags::HALF_TRANSFER & Flags::TRANSFER_COMPLETE) {
@@ -473,7 +465,7 @@ where
 
     fn poll(&self) -> impl Future<Output = Result<Half>> + '_ {
         poll_fn(move |cx| {
-            self.periph_channel.channel.0.clear_flags(Flags::GLOBAL);
+            self.periph_channel.channel.clear_flags(Flags::GLOBAL);
             match self.accessable_half() {
                 Ok(Some(half)) => Poll::Ready(Ok(half)),
                 Ok(None) => {
@@ -493,13 +485,11 @@ where
             Half::First => {
                 self.periph_channel
                     .channel
-                    .0
                     .clear_flags(Flags::HALF_TRANSFER);
             }
             Half::Second => {
                 self.periph_channel
                     .channel
-                    .0
                     .clear_flags(Flags::TRANSFER_COMPLETE);
             }
         }
