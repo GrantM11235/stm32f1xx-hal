@@ -597,7 +597,7 @@ unsafe impl<ADC, PINS> dma::DmaPeriph for AdcDma<ADC, PINS> {
 
     type MemWord = u16;
 
-    type Channel = dma::dma1::C1;
+    type CX = dma::dma1::C1;
 
     fn address(&self) -> u32 {
         unsafe { &(*ADC1::ptr()).dr as *const _ as u32 }

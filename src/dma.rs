@@ -154,15 +154,35 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
     fn get_flags(&self) -> Flags;
 
     fn clear_flags(&self, flags: Flags);
+}
 
-    fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<Self, PERIPH>
+pub struct ChannelHighLevel<CX>(CX)
+where
+    CX: ChannelLowLevel;
+
+impl<CX> ChannelHighLevel<CX>
+where
+    CX: ChannelLowLevel,
+{
+    fn poll(&self) -> impl Future<Output = ()> + '_ {
+        poll_fn(move |cx| {
+            if self.0.get_ndt() == 0 {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
+    fn take_periph<PERIPH>(mut self, periph: PERIPH) -> PeriphChannel<CX, PERIPH>
     where
-        PERIPH: DmaPeriph<Channel = Self>,
+        PERIPH: DmaPeriph<CX = CX>,
     {
         unsafe {
-            self.cr().reset();
-            self.set_par(periph.address());
-            self.cr().write(|w| {
+            self.0.cr().reset();
+            self.0.set_par(periph.address());
+            self.0.cr().write(|w| {
                 w.mem2mem()
                     .disabled()
                     .pl()
@@ -193,26 +213,6 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
             channel: self,
             periph,
         }
-    }
-}
-
-pub struct ChannelHighLevel<CHX>(CHX)
-where
-    CHX: ChannelLowLevel;
-
-impl<CHX> ChannelHighLevel<CHX>
-where
-    CHX: ChannelLowLevel,
-{
-    fn poll(&self) -> impl Future<Output = ()> + '_ {
-        poll_fn(move |cx| {
-            if self.0.get_ndt() == 0 {
-                Poll::Ready(())
-            } else {
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        })
     }
 
     pub async fn mem_to_mem<SOURCE, DEST>(
@@ -306,10 +306,10 @@ pub unsafe trait DmaPeriph {
     type Direction: Direction;
     type PeriphWord: DmaWord;
     type MemWord: DmaWord;
-    type Channel: ChannelLowLevel;
+    type CX: ChannelLowLevel;
     fn address(&self) -> u32;
 
-    fn configure_channel(self, channel: Self::Channel) -> PeriphChannel<Self::Channel, Self>
+    fn configure_channel(self, channel: ChannelHighLevel<Self::CX>) -> PeriphChannel<Self::CX, Self>
     where
         Self: Sized,
     {
@@ -317,35 +317,36 @@ pub unsafe trait DmaPeriph {
     }
 }
 
-pub struct PeriphChannel<CHANNEL, PERIPH>
+pub struct PeriphChannel<CX, PERIPH>
 where
-    CHANNEL: ChannelLowLevel,
+    CX: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    channel: CHANNEL,
+    channel: ChannelHighLevel<CX>,
     periph: PERIPH,
 }
 
-impl<CHANNEL, PERIPH> PeriphChannel<CHANNEL, PERIPH>
+impl<CX, PERIPH> PeriphChannel<CX, PERIPH>
 where
-    CHANNEL: ChannelLowLevel,
+    CX: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    pub fn split(self) -> (CHANNEL, PERIPH) {
+    pub fn split(self) -> (ChannelHighLevel<CX>, PERIPH) {
         (self.channel, self.periph)
     }
 
     unsafe fn start(&mut self, address: u32, len: usize, circular: bool) {
-        self.channel.set_mar(address);
-        self.channel.set_ndt(len.try_into().unwrap());
+        self.channel.0.set_mar(address);
+        self.channel.0.set_ndt(len.try_into().unwrap());
         self.channel
+            .0
             .cr()
             .modify(|_, w| w.en().enabled().circ().bit(circular));
     }
 
     fn poll(&self) -> impl Future<Output = ()> + '_ {
         poll_fn(move |cx| {
-            if self.channel.get_ndt() == 0 {
+            if self.channel.0.get_ndt() == 0 {
                 Poll::Ready(())
             } else {
                 cx.waker().wake_by_ref();
@@ -355,8 +356,8 @@ where
     }
 
     fn stop(&mut self) {
-        unsafe { self.channel.cr().modify(|_, w| w.en().clear_bit()) };
-        self.channel.clear_flags(Flags::all());
+        unsafe { self.channel.0.cr().modify(|_, w| w.en().clear_bit()) };
+        self.channel.0.clear_flags(Flags::all());
     }
 }
 
@@ -456,7 +457,7 @@ where
     }
 
     fn accessable_half(&self) -> Result<Option<Half>> {
-        let flags = self.periph_channel.channel.get_flags();
+        let flags = self.periph_channel.channel.0.get_flags();
         if flags.contains(Flags::TRANSFER_ERROR) {
             Err(Error::TransferError)
         } else if flags.contains(Flags::HALF_TRANSFER & Flags::TRANSFER_COMPLETE) {
@@ -472,7 +473,7 @@ where
 
     fn poll(&self) -> impl Future<Output = Result<Half>> + '_ {
         poll_fn(move |cx| {
-            self.periph_channel.channel.clear_flags(Flags::GLOBAL);
+            self.periph_channel.channel.0.clear_flags(Flags::GLOBAL);
             match self.accessable_half() {
                 Ok(Some(half)) => Poll::Ready(Ok(half)),
                 Ok(None) => {
@@ -492,11 +493,13 @@ where
             Half::First => {
                 self.periph_channel
                     .channel
+                    .0
                     .clear_flags(Flags::HALF_TRANSFER);
             }
             Half::Second => {
                 self.periph_channel
                     .channel
+                    .0
                     .clear_flags(Flags::TRANSFER_COMPLETE);
             }
         }
