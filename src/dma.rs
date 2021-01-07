@@ -33,7 +33,6 @@ enum Half {
 }
 
 type Result<T> = core::result::Result<T, Error>;
-type ResultNonBlocking<T> = nb::Result<T, Error>;
 
 pub trait DmaExt {
     type Channels;
@@ -195,12 +194,32 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
             periph,
         }
     }
+}
 
-    fn new_mem_to_mem<SOURCE, DEST>(
-        mut self,
+pub struct ChannelHighLevel<CHX>(CHX)
+where
+    CHX: ChannelLowLevel;
+
+impl<CHX> ChannelHighLevel<CHX>
+where
+    CHX: ChannelLowLevel,
+{
+    fn poll(&self) -> impl Future<Output = ()> + '_ {
+        poll_fn(move |cx| {
+            if self.0.get_ndt() == 0 {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn mem_to_mem<SOURCE, DEST>(
+        &mut self,
         source: SOURCE,
         mut dest: DEST,
-    ) -> Result<MemToMemTransfer<Self, SOURCE, DEST>>
+    ) -> (SOURCE, DEST)
     where
         SOURCE: StaticReadBuffer,
         <SOURCE as StaticReadBuffer>::Word: DmaWord,
@@ -210,22 +229,18 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
         let (source_ptr, source_len) = unsafe { source.static_read_buffer() };
         let (dest_ptr, dest_len) = unsafe { dest.static_write_buffer() };
 
-        if source_len != dest_len {
-            return Err(Error::LengthMismatch);
-        }
+        assert_eq!(source_len, dest_len);
 
-        let len: u16 = source_len.try_into().map_err(|_| Error::BufferTooLong)?;
+        let len: u16 = source_len.try_into().unwrap();
 
         unsafe {
-            self.cr().reset();
-            self.set_par(source_ptr as u32);
-            self.set_mar(dest_ptr as u32);
-            self.set_ndt(len);
-            self.cr().write(|w| {
+            self.0.cr().reset();
+            self.0.set_par(source_ptr as u32);
+            self.0.set_mar(dest_ptr as u32);
+            self.0.set_ndt(len);
+            self.0.cr().write(|w| {
                 w.mem2mem()
                     .enabled()
-                    .pl()
-                    .low()
                     .msize()
                     .variant(<DEST as StaticWriteBuffer>::Word::SIZE)
                     .psize()
@@ -234,25 +249,18 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
                     .enabled()
                     .pinc()
                     .enabled()
-                    .circ()
-                    .disabled()
                     .dir()
                     .from_peripheral()
-                    .teie()
-                    .disabled()
-                    .htie()
-                    .disabled()
-                    .tcie()
-                    .disabled()
                     .en()
                     .enabled()
             })
         }
-        Ok(MemToMemTransfer {
-            channel: self,
-            source,
-            dest,
-        })
+
+        self.poll().await;
+
+        unsafe { self.0.cr().reset() };
+
+        (source, dest)
     }
 }
 
@@ -510,36 +518,5 @@ where
         self.mark_half_done()?;
 
         Ok(ret)
-    }
-}
-
-pub struct MemToMemTransfer<CHANNEL, SOURCE, DEST>
-where
-    CHANNEL: ChannelLowLevel,
-    SOURCE: StaticReadBuffer,
-    DEST: StaticWriteBuffer,
-{
-    channel: CHANNEL,
-    source: SOURCE,
-    dest: DEST,
-}
-
-impl<CHANNEL, SOURCE, DEST> MemToMemTransfer<CHANNEL, SOURCE, DEST>
-where
-    CHANNEL: ChannelLowLevel,
-    SOURCE: StaticReadBuffer,
-    DEST: StaticWriteBuffer,
-{
-    pub fn abort(mut self) -> (CHANNEL, SOURCE, DEST) {
-        unsafe { self.channel.cr().reset() };
-        (self.channel, self.source, self.dest)
-    }
-
-    pub fn poll(self) -> ResultNonBlocking<()> {
-        if self.channel.get_ndt() != 0 {
-            Err(nb::Error::WouldBlock)
-        } else {
-            Ok(())
-        }
     }
 }
