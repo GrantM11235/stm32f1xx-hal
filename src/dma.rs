@@ -161,6 +161,7 @@ where
     CHANNEL: ChannelLowLevel,
 {
     poll_fn(move |cx| {
+        channel.clear_flags(Flags::GLOBAL);
         if channel.get_ndt() == 0 {
             Poll::Ready(())
         } else {
@@ -264,20 +265,34 @@ mod private {
     pub trait Sealed {}
 }
 
-pub trait DmaWord {
-    const SIZE: pac::dma1::ch::cr::PSIZE_A;
+type DmaWordSize = pac::dma1::ch::cr::PSIZE_A;
+
+pub unsafe trait DmaWord {
+    const SIZE: DmaWordSize;
 }
 
-impl DmaWord for u8 {
-    const SIZE: pac::dma1::ch::cr::PSIZE_A = pac::dma1::ch::cr::PSIZE_A::BITS8;
+unsafe impl DmaWord for u8 {
+    const SIZE: DmaWordSize = DmaWordSize::BITS8;
 }
 
-impl DmaWord for u16 {
-    const SIZE: pac::dma1::ch::cr::PSIZE_A = pac::dma1::ch::cr::PSIZE_A::BITS16;
+unsafe impl DmaWord for [u8; 2] {
+    const SIZE: DmaWordSize = DmaWordSize::BITS16;
 }
 
-impl DmaWord for u32 {
-    const SIZE: pac::dma1::ch::cr::PSIZE_A = pac::dma1::ch::cr::PSIZE_A::BITS32;
+unsafe impl DmaWord for [u8; 4] {
+    const SIZE: DmaWordSize = DmaWordSize::BITS32;
+}
+
+unsafe impl DmaWord for u16 {
+    const SIZE: DmaWordSize = DmaWordSize::BITS16;
+}
+
+unsafe impl DmaWord for [u16; 2] {
+    const SIZE: DmaWordSize = DmaWordSize::BITS32;
+}
+
+unsafe impl DmaWord for u32 {
+    const SIZE: DmaWordSize = DmaWordSize::BITS32;
 }
 
 /// Read transfer
@@ -339,17 +354,6 @@ where
             .modify(|_, w| w.en().enabled().circ().bit(circular));
     }
 
-    fn poll(&self) -> impl Future<Output = ()> + '_ {
-        poll_fn(move |cx| {
-            if self.channel.get_ndt() == 0 {
-                Poll::Ready(())
-            } else {
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        })
-    }
-
     fn stop(&mut self) {
         unsafe { self.channel.cr().modify(|_, w| w.en().clear_bit()) };
         self.channel.clear_flags(Flags::all());
@@ -369,7 +373,7 @@ where
 
         unsafe { self.start(ptr as u32, len, false) };
 
-        self.poll().await;
+        poll(&self.channel).await;
 
         self.stop();
 
@@ -407,7 +411,7 @@ where
 
         unsafe { self.start(ptr as u32, len, false) };
 
-        self.poll().await;
+        poll(&self.channel).await;
 
         self.stop();
 
