@@ -156,9 +156,9 @@ pub trait ChannelLowLevel: Sized + private::Sealed {
     fn clear_flags(&self, flags: Flags);
 }
 
-fn poll<CX>(channel: &CX) -> impl Future<Output = ()> + '_
+fn poll<CHANNEL>(channel: &CHANNEL) -> impl Future<Output = ()> + '_
 where
-    CX: ChannelLowLevel,
+    CHANNEL: ChannelLowLevel,
 {
     poll_fn(move |cx| {
         if channel.get_ndt() == 0 {
@@ -170,10 +170,13 @@ where
     })
 }
 
-fn take_periph<CX, PERIPH>(mut channel: CX, periph: PERIPH) -> PeriphChannel<CX, PERIPH>
+fn take_periph<CHANNEL, PERIPH>(
+    mut channel: CHANNEL,
+    periph: PERIPH,
+) -> PeriphChannel<CHANNEL, PERIPH>
 where
-    CX: ChannelLowLevel,
-    PERIPH: DmaPeriph<CX = CX>,
+    CHANNEL: ChannelLowLevel,
+    PERIPH: DmaPeriph<Channel = CHANNEL>,
 {
     unsafe {
         channel.cr().reset();
@@ -208,13 +211,13 @@ where
     PeriphChannel { channel, periph }
 }
 
-pub async fn mem_to_mem<CX, SOURCE, DEST>(
-    channel: &mut CX,
+pub async fn mem_to_mem<CHANNEL, SOURCE, DEST>(
+    channel: &mut CHANNEL,
     source: SOURCE,
     mut dest: DEST,
 ) -> (SOURCE, DEST)
 where
-    CX: ChannelLowLevel,
+    CHANNEL: ChannelLowLevel,
     SOURCE: StaticReadBuffer,
     <SOURCE as StaticReadBuffer>::Word: DmaWord,
     DEST: StaticWriteBuffer,
@@ -299,10 +302,10 @@ pub unsafe trait DmaPeriph {
     type Direction: Direction;
     type PeriphWord: DmaWord;
     type MemWord: DmaWord;
-    type CX: ChannelLowLevel;
+    type Channel: ChannelLowLevel;
     fn address(&self) -> u32;
 
-    fn configure_channel(self, channel: Self::CX) -> PeriphChannel<Self::CX, Self>
+    fn configure_channel(self, channel: Self::Channel) -> PeriphChannel<Self::Channel, Self>
     where
         Self: Sized,
     {
@@ -310,21 +313,21 @@ pub unsafe trait DmaPeriph {
     }
 }
 
-pub struct PeriphChannel<CX, PERIPH>
+pub struct PeriphChannel<CHANNEL, PERIPH>
 where
-    CX: ChannelLowLevel,
+    CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    channel: CX,
+    channel: CHANNEL,
     periph: PERIPH,
 }
 
-impl<CX, PERIPH> PeriphChannel<CX, PERIPH>
+impl<CHANNEL, PERIPH> PeriphChannel<CHANNEL, PERIPH>
 where
-    CX: ChannelLowLevel,
+    CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph,
 {
-    pub fn split(self) -> (CX, PERIPH) {
+    pub fn split(self) -> (CHANNEL, PERIPH) {
         (self.channel, self.periph)
     }
 
