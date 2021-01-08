@@ -3,7 +3,7 @@
 use core::{convert::TryInto, task::Poll};
 
 use embedded_dma::{StaticReadBuffer, StaticWriteBuffer};
-use futures::{future::poll_fn, Future};
+use futures::{Future, future::poll_fn};
 
 use crate::pac;
 use crate::rcc;
@@ -58,29 +58,29 @@ macro_rules! dma {
             /// A singleton that represents a single DMAx channel (channel X in this case)
             ///
             /// This singleton has exclusive access to the registers of the DMAx channel X
-            pub struct $CX { ch: &'static pac::dma1::CH }
+            pub struct $CX {}
 
             impl dma::private::Sealed for $CX {}
 
             impl dma::ChannelLowLevel for $CX {
                 unsafe fn set_par(&mut self, address: u32) {
-                    self.ch.par.write(|w| w.pa().bits(address) );
+                    &(*pac::$DMAX::ptr()).$chX.par.write(|w| w.pa().bits(address) );
                 }
 
                 unsafe fn set_mar(&mut self, address: u32) {
-                    self.ch.mar.write(|w| w.ma().bits(address) );
+                    &(*pac::$DMAX::ptr()).$chX.mar.write(|w| w.ma().bits(address) );
                 }
 
                 unsafe fn set_ndt(&mut self, len: u16) {
-                    self.ch.ndtr.write(|w| w.ndt().bits(len));
+                    &(*pac::$DMAX::ptr()).$chX.ndtr.write(|w| w.ndt().bits(len));
                 }
 
                 fn get_ndt(&self) -> u16 {
-                    self.ch.ndtr.read().bits() as u16
+                    unsafe { &(*pac::$DMAX::ptr()) }.$chX.ndtr.read().bits() as u16
                 }
 
                 unsafe fn cr(&mut self) -> &pac::dma1::ch::CR {
-                    &self.ch.cr
+                    &&(*pac::$DMAX::ptr()).$chX.cr
                 }
 
                 fn get_flags(&self) -> dma::Flags {
@@ -106,7 +106,7 @@ macro_rules! dma {
                     $chX.cr.reset();
                 )+
 
-                Channels{ $($chX: $CX { ch: $chX }),+ }
+                Channels{ $($chX: $CX {}),+ }
             }
         }
     }
@@ -171,7 +171,7 @@ where
     })
 }
 
-fn take_periph<CHANNEL, PERIPH>(
+pub fn take_periph<CHANNEL, PERIPH>(
     mut channel: CHANNEL,
     periph: PERIPH,
 ) -> PeriphChannel<CHANNEL, PERIPH>
@@ -267,7 +267,7 @@ mod private {
 
 type DmaWordSize = pac::dma1::ch::cr::PSIZE_A;
 
-pub unsafe trait DmaWord {
+pub unsafe trait DmaWord: Copy {
     const SIZE: DmaWordSize;
 }
 
@@ -380,14 +380,23 @@ where
         buffer
     }
 
+    // pub fn into_stream<BUFFER>(self, buffer: BUFFER) -> DmaStream<CHANNEL, PERIPH, BUFFER>
+    // where
+    //     BUFFER: StaticWriteBuffer<Word = PERIPH::MemWord>,
+    //     BUFFER: AsRef<[PERIPH::MemWord]>,
+    // {
+    //     todo!()
+    // }
+
     pub fn recieve_circular<HALFBUFFER>(
         mut self,
-        buffer: [HALFBUFFER; 2],
+        buffer: &'static mut [HALFBUFFER; 2],
     ) -> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
     where
-        HALFBUFFER: StaticReadBuffer<Word = PERIPH::MemWord>,
+        &'static mut [HALFBUFFER; 2]: StaticReadBuffer<Word = PERIPH::MemWord>,
+        HALFBUFFER: 'static,
     {
-        let (ptr, half_len) = unsafe { buffer[0].static_read_buffer() };
+        let (ptr, half_len) = unsafe { buffer.static_read_buffer() };
 
         unsafe { self.start(ptr as u32, half_len * 2, true) };
 
@@ -418,52 +427,62 @@ where
         buffer
     }
 
-    pub fn send_circular<HALFBUFFER>(
-        mut self,
-        mut buffer: [HALFBUFFER; 2],
-    ) -> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
-    where
-        HALFBUFFER: StaticWriteBuffer<Word = PERIPH::MemWord>,
-    {
-        let (ptr, half_len) = unsafe { buffer[0].static_write_buffer() };
+    // pub fn send_circular<HALFBUFFER>(
+    //     mut self,
+    //     mut buffer: [HALFBUFFER; 2],
+    // ) -> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
+    // where
+    //     HALFBUFFER: StaticWriteBuffer<Word = PERIPH::MemWord>,
+    // {
+    //     let (ptr, half_len) = unsafe { buffer[0].static_write_buffer() };
 
-        unsafe { self.start(ptr as u32, half_len * 2, true) };
+    //     unsafe { self.start(ptr as u32, half_len * 2, true) };
 
-        CircularTransfer {
-            periph_channel: self,
-            buffer,
-        }
-    }
+    //     CircularTransfer {
+    //         periph_channel: self,
+    //         buffer,
+    //     }
+    // }
 }
 
 pub struct CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
 where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph,
+    &'static mut [HALFBUFFER; 2]: StaticReadBuffer<Word = PERIPH::MemWord>,
+    HALFBUFFER: 'static,
 {
     periph_channel: PeriphChannel<CHANNEL, PERIPH>,
-    buffer: [HALFBUFFER; 2],
+    buffer: &'static mut [HALFBUFFER; 2],
 }
 
 impl<CHANNEL, PERIPH, HALFBUFFER> CircularTransfer<CHANNEL, PERIPH, HALFBUFFER>
 where
     CHANNEL: ChannelLowLevel,
     PERIPH: DmaPeriph,
+    &'static mut [HALFBUFFER; 2]: StaticReadBuffer<Word = PERIPH::MemWord>,
+    HALFBUFFER: 'static,
 {
-    pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, [HALFBUFFER; 2]) {
+    pub fn abort(mut self) -> (PeriphChannel<CHANNEL, PERIPH>, &'static mut [HALFBUFFER; 2]) {
         self.periph_channel.stop();
         (self.periph_channel, self.buffer)
     }
 
     fn accessable_half(&self) -> Result<Option<Half>> {
         let flags = self.periph_channel.channel.get_flags();
+        if flags.bits != 0 {
+            defmt::info!("{:u32}", flags.bits);
+        }
         if flags.contains(Flags::TRANSFER_ERROR) {
             Err(Error::TransferError)
-        } else if flags.contains(Flags::HALF_TRANSFER & Flags::TRANSFER_COMPLETE) {
+        } else if flags.contains(Flags::HALF_TRANSFER | Flags::TRANSFER_COMPLETE) {
+            self.periph_channel.channel.clear_flags(Flags::HALF_TRANSFER & Flags::TRANSFER_COMPLETE);
             Err(Error::Overrun)
         } else if flags.contains(Flags::HALF_TRANSFER) {
+            self.periph_channel.channel.clear_flags(Flags::HALF_TRANSFER);
             Ok(Some(Half::First))
         } else if flags.contains(Flags::TRANSFER_COMPLETE) {
+            self.periph_channel.channel.clear_flags(Flags::TRANSFER_COMPLETE);
             Ok(Some(Half::Second))
         } else {
             Ok(None)
@@ -472,7 +491,7 @@ where
 
     fn poll(&self) -> impl Future<Output = Result<Half>> + '_ {
         poll_fn(move |cx| {
-            self.periph_channel.channel.clear_flags(Flags::GLOBAL);
+            // self.periph_channel.channel.clear_flags(Flags::GLOBAL);
             match self.accessable_half() {
                 Ok(Some(half)) => Poll::Ready(Ok(half)),
                 Ok(None) => {
@@ -484,24 +503,24 @@ where
         })
     }
 
-    fn mark_half_done(&mut self) -> Result<()> {
-        // Panics if there is no accessable half
-        let half = self.accessable_half()?.unwrap();
+    // fn mark_half_done(&mut self) -> Result<()> {
+    //     // Panics if there is no accessable half
+    //     let half = self.accessable_half()?.unwrap();
 
-        match half {
-            Half::First => {
-                self.periph_channel
-                    .channel
-                    .clear_flags(Flags::HALF_TRANSFER);
-            }
-            Half::Second => {
-                self.periph_channel
-                    .channel
-                    .clear_flags(Flags::TRANSFER_COMPLETE);
-            }
-        }
-        Ok(())
-    }
+    //     match half {
+    //         Half::First => {
+    //             self.periph_channel
+    //                 .channel
+    //                 .clear_flags(Flags::HALF_TRANSFER);
+    //         }
+    //         Half::Second => {
+    //             self.periph_channel
+    //                 .channel
+    //                 .clear_flags(Flags::TRANSFER_COMPLETE);
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn peek<R, F>(&mut self, f: F) -> Result<R>
     where
@@ -515,8 +534,51 @@ where
         // XXX does this need a compiler barrier?
         let ret = f(buf);
 
-        self.mark_half_done()?;
-
-        Ok(ret)
+        if self.accessable_half()? != None {
+            Err(Error::Overrun)
+        } else {
+            Ok(ret)
+        }
     }
 }
+
+// pub struct DmaStream<CHANNEL, PERIPH, BUFFER>
+// where
+//     CHANNEL: ChannelLowLevel,
+//     PERIPH: DmaPeriph,
+//     BUFFER: AsRef<[PERIPH::MemWord]>,
+// {
+//     periph_channel: PeriphChannel<CHANNEL, PERIPH>,
+//     buffer: BUFFER,
+//     i: u16,
+// }
+
+// impl<CHANNEL, PERIPH, BUFFER> Stream for DmaStream<CHANNEL, PERIPH, BUFFER>
+// where
+//     CHANNEL: ChannelLowLevel,
+//     PERIPH: DmaPeriph,
+//     BUFFER: AsRef<[PERIPH::MemWord]>,
+// {
+//     type Item = PERIPH::MemWord;
+
+//     fn poll_next(
+//         self: core::pin::Pin<&mut Self>,
+//         cx: &mut core::task::Context<'_>,
+//     ) -> Poll<Option<Self::Item>> {
+//         if self.periph_channel.channel.get_ndt() < self.i {
+//             let val = self.buffer.as_ref()[self.i as usize];
+//             self.i += 1;
+//             if self.i as usize == self.buffer.as_ref().len() {
+//                 unsafe {
+//                     self.periph_channel.channel.cr().modify(|_, w| w.en().disabled());
+//                     self.periph_channel.channel.cr().modify(|_, w| w.en().enabled());
+//                 }
+//                 self.i = 0;
+//             }
+//             Poll::Ready(Some(val))
+//         } else {
+//             cx.waker().wake_by_ref();
+//             Poll::Pending
+//         }
+//     }
+// }

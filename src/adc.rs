@@ -590,7 +590,7 @@ impl<ADC, PINS> AdcDma<ADC, PINS> {
     }
 }
 
-unsafe impl<PINS> dma::DmaPeriph for AdcDma<ADC1, PINS> {
+unsafe impl<ADC, PINS> dma::DmaPeriph for AdcDma<ADC, PINS> {
     type Direction = dma::Rx;
 
     type PeriphWord = u32;
