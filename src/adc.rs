@@ -648,6 +648,9 @@ impl Adc<ADC1> {
             .modify(|_, w| unsafe { w.sq1().bits(PIN::channel()) });
         self.rb.cr2.modify(|_, w| w.dma().set_bit());
 
+        self.rb.cr2.modify(|_, w| w.cont().set_bit());
+        self.rb.cr2.modify(|_, w| w.adon().set_bit());
+
         AdcDma { adc: self, pins }
     }
 

@@ -398,7 +398,7 @@ where
     {
         let (ptr, half_len) = unsafe { buffer.static_read_buffer() };
 
-        unsafe { self.start(ptr as u32, half_len * 2, true) };
+        unsafe { self.start(ptr as u32, half_len, true) };
 
         CircularTransfer {
             periph_channel: self,
@@ -470,9 +470,7 @@ where
 
     fn accessable_half(&self) -> Result<Option<Half>> {
         let flags = self.periph_channel.channel.get_flags();
-        if flags.bits != 0 {
-            defmt::info!("{:u32}", flags.bits);
-        }
+
         if flags.contains(Flags::TRANSFER_ERROR) {
             Err(Error::TransferError)
         } else if flags.contains(Flags::HALF_TRANSFER | Flags::TRANSFER_COMPLETE) {
@@ -491,7 +489,6 @@ where
 
     fn poll(&self) -> impl Future<Output = Result<Half>> + '_ {
         poll_fn(move |cx| {
-            // self.periph_channel.channel.clear_flags(Flags::GLOBAL);
             match self.accessable_half() {
                 Ok(Some(half)) => Poll::Ready(Ok(half)),
                 Ok(None) => {
@@ -503,34 +500,17 @@ where
         })
     }
 
-    // fn mark_half_done(&mut self) -> Result<()> {
-    //     // Panics if there is no accessable half
-    //     let half = self.accessable_half()?.unwrap();
-
-    //     match half {
-    //         Half::First => {
-    //             self.periph_channel
-    //                 .channel
-    //                 .clear_flags(Flags::HALF_TRANSFER);
-    //         }
-    //         Half::Second => {
-    //             self.periph_channel
-    //                 .channel
-    //                 .clear_flags(Flags::TRANSFER_COMPLETE);
-    //         }
-    //     }
-    //     Ok(())
-    // }
-
     pub async fn peek<R, F>(&mut self, f: F) -> Result<R>
     where
-        F: FnOnce(&mut HALFBUFFER) -> R,
+        F: FnOnce(&HALFBUFFER) -> R,
     {
         let buf = match self.poll().await? {
-            Half::First => &mut self.buffer[0],
-            Half::Second => &mut self.buffer[1],
+            Half::First => &self.buffer[0],
+            Half::Second => &self.buffer[1],
         };
 
+
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         // XXX does this need a compiler barrier?
         let ret = f(buf);
 
